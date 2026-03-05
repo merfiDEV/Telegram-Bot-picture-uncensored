@@ -1,7 +1,9 @@
 import time
+from datetime import datetime
 
 
 _START_TIME = time.monotonic()
+_STARTED_AT = datetime.now()
 _USAGE_COUNT = 0
 _ERROR_COUNT = 0
 
@@ -20,6 +22,7 @@ def get_stats() -> dict:
     uptime_seconds = max(0, int(time.monotonic() - _START_TIME))
     return {
         "uptime_seconds": uptime_seconds,
+        "started_at": _STARTED_AT,
         "usage_count": _USAGE_COUNT,
         "error_count": _ERROR_COUNT,
     }
@@ -40,3 +43,7 @@ def format_uptime(seconds: int) -> str:
     parts.append(f"{secs}с")
 
     return " ".join(parts)
+
+
+def format_started_at(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S")
