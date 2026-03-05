@@ -4,12 +4,14 @@ from aiogram import F
 from aiogram.types import InlineQuery, InlineQueryResultPhoto
 
 from xz.services.bing_images import search_images
+from xz.stats import increment_error, increment_usage
 
 
 def register_inline_handler(router) -> None:
     @router.inline_query(F.query.len() > 0)
     async def inline_handler(inline_query: InlineQuery):
         try:
+            increment_usage()
             query = inline_query.query
             offset = int(inline_query.offset) if inline_query.offset else 0
 
@@ -35,3 +37,4 @@ def register_inline_handler(router) -> None:
             )
         except Exception as exc:
             logging.error("Inline Error: %s", exc)
+            increment_error()

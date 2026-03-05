@@ -6,6 +6,8 @@ import urllib.parse
 
 import httpx
 
+from xz.stats import increment_error
+
 
 def get_image_hash(url: str) -> str:
     try:
@@ -77,4 +79,5 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50):
             return unique_results
     except Exception as exc:
         logging.error("Ошибка поиска: %s", exc)
+        increment_error()
         return []
