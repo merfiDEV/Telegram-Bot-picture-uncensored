@@ -4,6 +4,7 @@ from aiogram import Bot, Dispatcher
 
 from xz.config import get_bot_token
 from xz.handlers.inline import register_inline_handler
+from xz.handlers.logs import register_logs_handler
 from xz.handlers.start import register_start_handler
 from xz.handlers.stats import register_stats_handler
 from xz.logging_setup import setup_logging
@@ -14,6 +15,7 @@ def create_dispatcher() -> Dispatcher:
     register_start_handler(dp)
     register_inline_handler(dp)
     register_stats_handler(dp)
+    register_logs_handler(dp)
     return dp
 
 
