@@ -21,7 +21,7 @@ def register_stats_handler(router) -> None:
     async def cmd_stats(message: Message):
         admin_id = get_admin_id()
         if not message.from_user or message.from_user.id != admin_id:
-            await message.answer("Нет доступа", parse_mode="Markdown")
+            await message.answer("Нет доступа :/", parse_mode="Markdown")
             return
 
         stats = get_stats()
