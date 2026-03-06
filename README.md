@@ -1,4 +1,9 @@
 # XZ Inline Image Bot
+<p align="left">
+  <img src="https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54" />
+  <img src="https://img.shields.io/badge/aiogram-3.x-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white" />
+  <img src="https://img.shields.io/badge/httpx-000000?style=for-the-badge&logo=scipy&logoColor=white" />
+</p>
 
 Телеграм-бот на базе aiogram, который работает в inline-режиме и возвращает результаты поиска изображений через Bing.
 
