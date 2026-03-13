@@ -41,8 +41,8 @@
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone https://github.com/youruser/xz-image-bot.git
-    cd xz-image-bot
+    git clone [https://github.com/youruser/xz-image-bot.git](https://github.com/merfiDEV/Telegram-Bot-picture-uncensored)
+    cd 
     ```
 
 2.  **Настройте окружение:**
