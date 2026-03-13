@@ -1,6 +1,7 @@
 from aiogram import types
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 def register_start_handler(router) -> None:
@@ -10,17 +11,22 @@ def register_start_handler(router) -> None:
             "*🤖 Бот работает в асинхронном inline режиме!*\n\n"
             "Чтобы использовать бота, откройте любой чат и введите:\n"
             "`@имя_бота ваш_запрос`\n\n"
-            "⚠️ *Дисклеймер*\n\n"
-            "Данный бот автоматически обрабатывает поисковые запросы пользователей и\n"
+            "⚡ *Новинка:* Используйте флаг `--gif` в конце запроса для поиска анимаций.\n\n"
+            "⚠️ *Дисклеймер*\n"
+            "Данный бот автоматически обрабатывает поисковые запросы пользователей и "
             "показывает результаты из *открытых источников* в интернете.\n\n"
-            "*Создатель бота:*\n"
-            "— не хранит контент\n"
-            "— не загружает его на сервер\n"
-            "— не контролирует и не модерирует поисковые запросы пользователей\n\n"
-            "Вся ответственность за вводимые запросы и использование полученных материалов\n"
-            "лежит *исключительно на пользователе*.\n\n"
-            "Используя бота, вы подтверждаете, что:\n"
-            "• соблюдаете законы своей страны\n"
-            "• не используете бота для незаконных целей"
+            "*Важные правила:*\n"
+            "— Создатель не хранит и не модерирует контент\n"
+            "— Вся ответственность за запросы лежит на пользователе\n"
+            "— Используя бота, вы подтверждаете соблюдение законов вашей страны\n\n"
+            "💎 *Премиум-функции:* Кнопка «Открыть оригинал» под каждым изображением для доступа к высокому качеству."
         )
-        await message.answer(text, parse_mode="Markdown")
+        
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🔍 Попробовать поиск", switch_inline_query_current_chat=""))
+        
+        await message.answer(
+            text, 
+            parse_mode="Markdown",
+            reply_markup=builder.as_markup()
+        )

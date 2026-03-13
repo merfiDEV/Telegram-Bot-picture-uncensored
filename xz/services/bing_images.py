@@ -32,6 +32,11 @@ async def is_valid_image(client: httpx.AsyncClient, url: str) -> bool:
 
 
 async def search_images(query: str, start_index: int = 1, limit: int = 50):
+    bing_filters = ""
+    if "--gif" in query:
+        query = query.replace("--gif", "").strip()
+        bing_filters += "+filterui:photo-animatedgif"
+
     encoded_query = urllib.parse.quote(query)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -40,6 +45,8 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50):
 
     try:
         fetch_url = f"https://www.bing.com/images/search?q={encoded_query}&adlt=off&first={start_index}"
+        if bing_filters:
+            fetch_url += f"&qft={bing_filters}"
 
         async with httpx.AsyncClient(headers=headers, cookies=cookies, timeout=10.0, follow_redirects=True) as client:
             response = await client.get(fetch_url)

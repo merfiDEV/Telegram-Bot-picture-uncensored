@@ -1,7 +1,7 @@
 import logging
 
 from aiogram import F
-from aiogram.types import InlineQuery, InlineQueryResultPhoto
+from aiogram.types import InlineQuery, InlineQueryResultPhoto, InlineQueryResultGif, InlineKeyboardButton, InlineKeyboardMarkup
 
 from xz.services.bing_images import search_images
 from xz.stats import increment_error, increment_usage
@@ -19,20 +19,40 @@ def register_inline_handler(router) -> None:
 
             results = []
             for item in image_data:
-                results.append(
-                    InlineQueryResultPhoto(
-                        id=item["id"],
-                        photo_url=item["url"],
-                        thumbnail_url=item["url"],
-                    )
+                url = item["url"]
+                reply_markup = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text="🖼 Открыть оригинал", url=url)
+                        ]
+                    ]
                 )
+                
+                if url.lower().endswith(".gif"):
+                    results.append(
+                        InlineQueryResultGif(
+                            id=item["id"],
+                            gif_url=url,
+                            thumbnail_url=url,
+                            reply_markup=reply_markup
+                        )
+                    )
+                else:
+                    results.append(
+                        InlineQueryResultPhoto(
+                            id=item["id"],
+                            photo_url=url,
+                            thumbnail_url=url,
+                            reply_markup=reply_markup
+                        )
+                    )
 
             next_offset = str(offset + 30) if len(image_data) > 0 else ""
 
             await inline_query.answer(
                 results=results,
                 next_offset=next_offset,
-                cache_time=60,
+                cache_time=300,
                 is_personal=False,
             )
         except Exception as exc:
