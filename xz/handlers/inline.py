@@ -28,7 +28,7 @@ def register_inline_handler(router) -> None:
                     ]
                 )
                 
-                if url.lower().endswith(".gif"):
+                if item.get("is_gif"):
                     results.append(
                         InlineQueryResultGif(
                             id=item["id"],

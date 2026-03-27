@@ -17,23 +17,30 @@ def get_image_hash(url: str) -> str:
         return hashlib.md5(url.encode("utf-8")).hexdigest()
 
 
-async def is_valid_image(client: httpx.AsyncClient, url: str) -> bool:
+async def is_valid_image(client: httpx.AsyncClient, url: str) -> tuple[bool, bool]:
     try:
-        if not any(url.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-            pass
-
         response = await client.head(url, timeout=2.0, follow_redirects=True)
         if response.status_code == 200:
-            content_type = response.headers.get("Content-Type", "")
-            return content_type.startswith("image/")
-        return False
+            content_type = response.headers.get("Content-Type", "").lower()
+            is_valid = content_type.startswith("image/")
+            is_gif = content_type == "image/gif"
+            
+            # Дополнительная проверка по расширению, если Content-Type не однозначен
+            if not is_gif and url.lower().split("?")[0].endswith(".gif"):
+                is_gif = True
+                
+            return is_valid, is_gif
+        return False, False
     except Exception:
-        return False
+        return False, False
 
 
 async def search_images(query: str, start_index: int = 1, limit: int = 50):
     bing_filters = ""
+    is_gif_search = False
+    
     if "--gif" in query:
+        is_gif_search = True
         query = query.replace("--gif", "").strip()
         bing_filters += "+filterui:photo-animatedgif"
 
@@ -70,14 +77,19 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50):
 
             validity_results = await asyncio.gather(*tasks)
 
-            for link, is_ok in zip(potential_links, validity_results):
+            for link, (is_ok, is_gif) in zip(potential_links, validity_results):
                 if is_ok:
+                    # Если поиск гифок, но файл не гифка - пропускаем
+                    if is_gif_search and not is_gif:
+                        continue
+                        
                     img_hash = get_image_hash(link)
                     if img_hash not in seen_hashes:
                         seen_hashes.add(img_hash)
                         unique_results.append({
                             "url": link,
                             "id": img_hash,
+                            "is_gif": is_gif
                         })
 
                 if len(unique_results) >= limit:
