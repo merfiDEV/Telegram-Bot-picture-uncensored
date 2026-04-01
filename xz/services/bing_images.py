@@ -35,7 +35,7 @@ async def is_valid_image(client: httpx.AsyncClient, url: str) -> tuple[bool, boo
         return False, False
 
 
-async def search_images(query: str, start_index: int = 1, limit: int = 50):
+async def search_images(query: str, start_index: int = 1, limit: int = 50) -> tuple[list[dict], int]:
     bing_filters = ""
     is_gif_search = False
     
@@ -79,7 +79,6 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50):
 
             for link, (is_ok, is_gif) in zip(potential_links, validity_results):
                 if is_ok:
-                    # Если поиск гифок, но файл не гифка - пропускаем
                     if is_gif_search and not is_gif:
                         continue
                         
@@ -95,8 +94,9 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50):
                 if len(unique_results) >= limit:
                     break
 
-            return unique_results
+            consumed_count = len(potential_links)
+            return unique_results, consumed_count
     except Exception as exc:
         logging.error("Ошибка поиска: %s", exc)
         increment_error()
-        return []
+        return [], 0

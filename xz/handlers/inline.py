@@ -15,7 +15,7 @@ def register_inline_handler(router) -> None:
             query = inline_query.query
             offset = int(inline_query.offset) if inline_query.offset else 0
 
-            image_data = await search_images(query, start_index=offset + 1, limit=30)
+            image_data, consumed_count = await search_images(query, start_index=offset + 1, limit=30)
 
             results = []
             for item in image_data:
@@ -47,7 +47,7 @@ def register_inline_handler(router) -> None:
                         )
                     )
 
-            next_offset = str(offset + 30) if len(image_data) > 0 else ""
+            next_offset = str(offset + consumed_count) if consumed_count > 0 else ""
 
             await inline_query.answer(
                 results=results,
