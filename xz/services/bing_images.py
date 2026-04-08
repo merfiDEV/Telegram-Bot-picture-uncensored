@@ -2,11 +2,12 @@ import asyncio
 import hashlib
 import logging
 import re
+import time
 import urllib.parse
 
 import httpx
 
-from xz.stats import increment_error
+from xz.stats import record_error, record_request_time
 
 
 def get_image_hash(url: str) -> str:
@@ -108,7 +109,10 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50) -> tu
             fetch_url += f"&qft={bing_filters}"
 
         async with httpx.AsyncClient(headers=headers, cookies=cookies, timeout=10.0, follow_redirects=True) as client:
+            request_start = time.monotonic()
             response = await client.get(fetch_url)
+            request_elapsed = time.monotonic() - request_start
+            record_request_time(request_elapsed)
             response.raise_for_status()
 
             links = re.findall(r"murl&quot;:&quot;(.*?)&quot;", response.text)
@@ -148,7 +152,19 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50) -> tu
 
             consumed_count = len(potential_links)
             return unique_results, consumed_count
+    except httpx.TimeoutException:
+        logging.error("Таймаут запроса: %s", query)
+        record_error("timeout")
+        return [], 0
+    except httpx.HTTPError as exc:
+        logging.error("HTTP ошибка при поисте: %s", exc)
+        record_error("http_error")
+        return [], 0
+    except re.error as exc:
+        logging.error("Ошибка парсинга ответа Bing: %s", exc)
+        record_error("parse_error")
+        return [], 0
     except Exception as exc:
-        logging.error("Ошибка поиска: %s", exc)
-        increment_error()
+        logging.error("Неизвестная ошибка при поиске: %s", exc)
+        record_error("unknown")
         return [], 0

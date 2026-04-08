@@ -1,10 +1,12 @@
 import httpx
 
+from aiogram import F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from xz.config import get_admin_id
-from xz.stats import format_started_at, format_uptime, get_stats
+from xz.stats import format_metrics, format_started_at, format_uptime, get_metrics, get_stats
 
 
 async def check_bing() -> tuple[bool, str]:
@@ -14,6 +16,12 @@ async def check_bing() -> tuple[bool, str]:
             return response.status_code < 400, str(response.status_code)
     except Exception as exc:
         return False, type(exc).__name__
+
+
+def _build_stats_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📈 Метрики", callback_data="show_metrics"))
+    return builder.as_markup()
 
 
 def register_stats_handler(router) -> None:
@@ -41,4 +49,16 @@ def register_stats_handler(router) -> None:
             "---\n"
             "[[ admin only ]]"
         )
-        await message.answer(text, parse_mode="Markdown")
+        await message.answer(text, parse_mode="Markdown", reply_markup=_build_stats_keyboard())
+
+    @router.callback_query(F.data == "show_metrics")
+    async def callback_show_metrics(callback: CallbackQuery):
+        admin_id = get_admin_id()
+        if not callback.from_user or callback.from_user.id != admin_id:
+            await callback.answer("Нет доступа :/")
+            return
+
+        metrics = get_metrics()
+        text = format_metrics(metrics)
+        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=None)
+        await callback.answer()
