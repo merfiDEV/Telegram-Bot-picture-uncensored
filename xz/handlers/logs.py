@@ -18,10 +18,9 @@ def _build_logs_archive() -> Path:
     temp_file.close()
 
     with ZipFile(temp_path, "w", ZIP_DEFLATED) as archive:
-        archive.write(logs_dir, arcname="logs/")
         for file_path in logs_dir.rglob("*"):
             if file_path.is_file():
-                archive.write(file_path, arcname=file_path.relative_to(logs_dir).as_posix())
+                archive.write(file_path, arcname=f"logs/{file_path.relative_to(logs_dir).as_posix()}")
 
     return temp_path
 

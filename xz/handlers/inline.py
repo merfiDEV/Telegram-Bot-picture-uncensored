@@ -64,3 +64,10 @@ def register_inline_handler(router) -> None:
         except Exception as exc:
             logging.error("Inline Error: %s", exc)
             increment_error()
+            try:
+                await inline_query.answer(
+                    results=[],
+                    cache_time=0,
+                )
+            except Exception as answer_exc:
+                logging.error("Failed to answer inline query after error: %s", answer_exc)
