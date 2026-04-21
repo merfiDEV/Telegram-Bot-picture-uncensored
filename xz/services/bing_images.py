@@ -115,34 +115,49 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50) -> tu
             record_request_time(request_elapsed)
             response.raise_for_status()
 
-            links = re.findall(r"murl&quot;:&quot;(.*?)&quot;", response.text)
+            # Extract metadata blocks containing image and page URLs
+            blocks = re.findall(r'm="({.*?})"', response.text)
 
             unique_results = []
             seen_hashes = set()
 
             tasks = []
-            potential_links = []
+            potential_items = []
 
-            for link in links:
-                if not link.startswith("http") or any(bad in link for bad in ["<", ">", "\"", " "]):
+            for block in blocks:
+                # Extract murl (media URL) and purl (page URL) using regex
+                murl_match = re.search(r"murl&quot;:&quot;(.*?)&quot;", block)
+                purl_match = re.search(r"purl&quot;:&quot;(.*?)&quot;", block)
+                
+                if not murl_match:
                     continue
-                potential_links.append(link)
-                tasks.append(is_valid_image(client, link))
+                
+                murl = murl_match.group(1)
+                purl = purl_match.group(1) if purl_match else None
+                
+                if not murl.startswith("http") or any(bad in murl for bad in ["<", ">", "\"", " "]):
+                    continue
+                    
+                potential_items.append({"url": murl, "source_url": purl})
+                tasks.append(is_valid_image(client, murl))
+                
                 if len(tasks) >= limit * 2:
                     break
 
             validity_results = await asyncio.gather(*tasks)
 
-            for link, (is_ok, is_gif) in zip(potential_links, validity_results):
+            for item, (is_ok, is_gif) in zip(potential_items, validity_results):
                 if is_ok:
                     if is_gif_search and not is_gif:
                         continue
                         
-                    img_hash = get_image_hash(link)
+                    url = item["url"]
+                    img_hash = get_image_hash(url)
                     if img_hash not in seen_hashes:
                         seen_hashes.add(img_hash)
                         unique_results.append({
-                            "url": link,
+                            "url": url,
+                            "source_url": item["source_url"],
                             "id": img_hash,
                             "is_gif": is_gif
                         })
@@ -150,7 +165,7 @@ async def search_images(query: str, start_index: int = 1, limit: int = 50) -> tu
                 if len(unique_results) >= limit:
                     break
 
-            consumed_count = len(potential_links)
+            consumed_count = len(blocks)
             return unique_results, consumed_count
     except httpx.TimeoutException:
         logging.error("Таймаут запроса: %s", query)

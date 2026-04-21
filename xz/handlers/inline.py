@@ -20,10 +20,16 @@ def register_inline_handler(router) -> None:
             results = []
             for item in image_data:
                 url = item["url"]
+                source_url = item.get("source_url")
+                
+                # Prioritize source page URL, fallback to image URL
+                button_url = source_url if source_url else url
+                button_text = "🌐 Перейти на сайт" if source_url else "🖼 Открыть оригинал"
+                
                 reply_markup = InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
-                            InlineKeyboardButton(text="🖼 Открыть оригинал", url=url)
+                            InlineKeyboardButton(text=button_text, url=button_url)
                         ]
                     ]
                 )
