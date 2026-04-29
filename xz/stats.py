@@ -66,42 +66,10 @@ def get_metrics() -> dict:
     }
 
 
-def format_metrics(metrics: dict) -> str:
-    lines = ["*📈 Метрики бота*", "---"]
-
-    # Response time
-    if metrics["avg_response_ms"] is not None:
-        lines.append(
-            f"*⏱ Отклик Bing:* "
-            f"среднее `{metrics['avg_response_ms']}мс` | "
-            f"мин `{metrics['min_response_ms']}мс` | "
-            f"макс `{metrics['max_response_ms']}мс`"
-        )
-        lines.append(f"*📊 Замеров:* `{metrics['total_requests_measured']}`")
-    else:
-        lines.append("*⏱ Отклик Bing:* нет данных")
-
-    lines.append("---")
-
-    # Error details
-    error_details = metrics["error_details"]
-    if error_details:
-        lines.append("*⚠️ Ошибки по типам:*")
-        for err_type, count in sorted(error_details.items(), key=lambda x: -x[1]):
-            lines.append(f"  `{err_type}` — `{count}`")
-    else:
-        lines.append("*⚠️ Ошибки:* отсутствуют")
-
-    lines.append("---")
-
-    # Request stats
-    lines.append(
-        f"*🔢 Запросы:* `{metrics['usage_count']}` "
-        f"(`{metrics['requests_per_min']}` запросов/мин)"
-    )
-    lines.append("---")
-
-    return "\n".join(lines)
+def _esc(text: str) -> str:
+    """Escape special chars for MarkdownV2."""
+    special = r"\_*[]()~`>#+=|{}.!-"
+    return "".join(f"\\{c}" if c in special else c for c in str(text))
 
 
 def format_uptime(seconds: int) -> str:
@@ -122,4 +90,73 @@ def format_uptime(seconds: int) -> str:
 
 
 def format_started_at(value: datetime) -> str:
-    return value.strftime("%Y-%m-%d %H:%M:%S")
+    return value.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def build_stats_text(stats: dict, bing_ok: bool, bing_status: str) -> str:
+    uptime = format_uptime(stats["uptime_seconds"])
+    started_at = format_started_at(stats["started_at"])
+    bing_icon = "✅" if bing_ok else "❌"
+
+    error_count = stats["error_count"]
+    usage_count = stats["usage_count"]
+
+    success_count = max(0, usage_count - error_count)
+    success_rate = (
+        round(success_count / usage_count * 100, 1) if usage_count > 0 else 100.0
+    )
+
+    lines = [
+        "📊 *Статистика бота*",
+        "",
+        "⏱ *Аптайм*",
+        f"  `{_esc(uptime)}` \\(с `{_esc(started_at)}`\\)",
+        "",
+        "🌐 *Внешние сервисы*",
+        f"  Bing: {bing_icon} `{_esc(bing_status)}`",
+        "",
+        "📈 *Запросы*",
+        f"  Всего: `{_esc(str(usage_count))}`",
+        f"  Успешных: `{_esc(str(success_count))}` \\({_esc(str(success_rate))}%\\)",
+        f"  Ошибок: `{_esc(str(error_count))}`",
+        "",
+        "🔐 _admin only_",
+    ]
+    return "\n".join(lines)
+
+
+def build_metrics_text(metrics: dict) -> str:
+    lines = ["📈 *Метрики производительности*", ""]
+
+    # Response times
+    if metrics["avg_response_ms"] is not None:
+        lines.append("⏱ *Время ответа Bing*")
+        lines.append(f"  среднее:  `{_esc(str(metrics['avg_response_ms']))} мс`")
+        lines.append(f"  мин:      `{_esc(str(metrics['min_response_ms']))} мс`")
+        lines.append(f"  макс:     `{_esc(str(metrics['max_response_ms']))} мс`")
+        lines.append(
+            f"  замеров:  `{_esc(str(metrics['total_requests_measured']))}`"
+        )
+    else:
+        lines.append("⏱ *Время ответа Bing:* нет данных")
+
+    lines.append("")
+
+    # RPM
+    lines.append(
+        f"🔢 *Нагрузка:* `{_esc(str(metrics['requests_per_min']))}` зап/мин"
+    )
+    lines.append("")
+
+    # Errors
+    error_details = metrics["error_details"]
+    if error_details:
+        lines.append("⚠️ *Ошибки по типам:*")
+        for err_type, count in sorted(
+            error_details.items(), key=lambda x: -x[1]
+        ):
+            lines.append(f"  `{_esc(err_type)}` — `{_esc(str(count))}`")
+    else:
+        lines.append("✅ *Ошибок не зафиксировано*")
+
+    return "\n".join(lines)
