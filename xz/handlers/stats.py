@@ -6,7 +6,14 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from xz.config import get_admin_id
-from xz.stats import build_metrics_text, build_stats_text, get_metrics, get_stats
+from xz.stats import (
+    build_metrics_text, 
+    build_stats_text, 
+    get_metrics, 
+    get_stats,
+    build_dashboard_text,
+    get_recent_requests
+)
 
 
 async def check_bing() -> tuple[bool, str]:
@@ -22,6 +29,9 @@ def _stats_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="📈 Метрики", callback_data="stats:metrics"),
+        InlineKeyboardButton(text="📋 Дашборд", callback_data="stats:dashboard"),
+    )
+    builder.row(
         InlineKeyboardButton(text="🔄 Обновить", callback_data="stats:refresh"),
     )
     return builder.as_markup()
@@ -32,6 +42,15 @@ def _metrics_keyboard() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data="stats:back"),
         InlineKeyboardButton(text="🔄 Обновить", callback_data="stats:metrics"),
+    )
+    return builder.as_markup()
+
+
+def _dashboard_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="stats:back"),
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="stats:dashboard"),
     )
     return builder.as_markup()
 
@@ -79,6 +98,23 @@ def register_stats_handler(router) -> None:
         try:
             await callback.message.edit_text(
                 text, parse_mode="MarkdownV2", reply_markup=_metrics_keyboard()
+            )
+        except Exception:
+            pass
+        await callback.answer()
+
+    @router.callback_query(F.data == "stats:dashboard")
+    async def callback_dashboard(callback: CallbackQuery):
+        admin_id = get_admin_id()
+        if not callback.from_user or callback.from_user.id != admin_id:
+            await callback.answer("⛔ Нет доступа", show_alert=True)
+            return
+
+        requests = get_recent_requests()
+        text = build_dashboard_text(requests)
+        try:
+            await callback.message.edit_text(
+                text, parse_mode="MarkdownV2", reply_markup=_dashboard_keyboard()
             )
         except Exception:
             pass

@@ -4,7 +4,7 @@ from aiogram import F
 from aiogram.types import InlineQuery, InlineQueryResultPhoto, InlineQueryResultGif, InlineKeyboardButton, InlineKeyboardMarkup
 
 from xz.services.bing_images import search_images
-from xz.stats import increment_error, increment_usage
+from xz.stats import increment_error, increment_usage, record_request
 
 
 def register_inline_handler(router) -> None:
@@ -61,9 +61,21 @@ def register_inline_handler(router) -> None:
                 cache_time=300,
                 is_personal=False,
             )
+            record_request(
+                user_id=inline_query.from_user.id,
+                username=inline_query.from_user.username,
+                query=query,
+                success=True
+            )
         except Exception as exc:
             logging.error("Inline Error: %s", exc)
             increment_error()
+            record_request(
+                user_id=inline_query.from_user.id,
+                username=inline_query.from_user.username,
+                query=inline_query.query,
+                success=False
+            )
             try:
                 await inline_query.answer(
                     results=[],

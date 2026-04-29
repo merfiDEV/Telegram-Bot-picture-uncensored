@@ -3,12 +3,15 @@ from collections import defaultdict
 from datetime import datetime
 
 
+from collections import deque
+
 _START_TIME = time.monotonic()
 _STARTED_AT = datetime.now()
 _USAGE_COUNT = 0
 _ERROR_COUNT = 0
 _response_times: list[float] = []
 _error_details: dict[str, int] = defaultdict(int)
+_recent_requests = deque(maxlen=20)
 
 
 def increment_usage() -> None:
@@ -28,6 +31,20 @@ def record_request_time(seconds: float) -> None:
 def record_error(error_type: str) -> None:
     _error_details[error_type] += 1
     increment_error()
+
+
+def record_request(user_id: int, username: str, query: str, success: bool) -> None:
+    _recent_requests.appendleft({
+        "time": datetime.now(),
+        "user_id": user_id,
+        "username": username or "Unknown",
+        "query": query,
+        "success": success
+    })
+
+
+def get_recent_requests() -> list[dict]:
+    return list(_recent_requests)
 
 
 def get_stats() -> dict:
@@ -159,4 +176,23 @@ def build_metrics_text(metrics: dict) -> str:
     else:
         lines.append("✅ *Ошибок не зафиксировано*")
 
+    return "\n".join(lines)
+
+
+def build_dashboard_text(requests: list[dict]) -> str:
+    lines = ["📋 *Дашборд последних запросов*", ""]
+    if not requests:
+        lines.append("  _Пусто_")
+        return "\n".join(lines)
+    
+    for i, req in enumerate(requests[:10]):
+        time_str = req["time"].strftime("%H:%M:%S")
+        status = "✅" if req["success"] else "❌"
+        user = req["username"]
+        uid = req["user_id"]
+        q = req["query"]
+        if len(q) > 20:
+            q = q[:20] + "..."
+        lines.append(f"`[{_esc(time_str)}]` {status} `@{_esc(user)}` \\(`{uid}`\\): _{_esc(q)}_")
+    
     return "\n".join(lines)
