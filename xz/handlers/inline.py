@@ -7,11 +7,18 @@ from aiogram.types import (
     InlineQueryResultArticle,
     InlineQueryResultGif,
     InlineQueryResultPhoto,
+    InlineQueryResultsButton,
     InputTextMessageContent,
 )
 
 from xz.services.bing_images import search_images
 from xz.stats import increment_error, increment_usage, record_request
+
+
+DEVELOPER_PROFILE_BUTTON = InlineQueryResultsButton(
+    text="\U0001f4bb \u041f\u0440\u043e\u0444\u0438\u043b\u044c \u0440\u0430\u0437\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0430 >",
+    start_parameter="developer",
+)
 
 
 EMPTY_QUERY_RESULT = InlineQueryResultArticle(
@@ -37,6 +44,7 @@ def register_inline_handler(router) -> None:
     async def empty_inline_handler(inline_query: InlineQuery):
         await inline_query.answer(
             results=[EMPTY_QUERY_RESULT],
+            button=DEVELOPER_PROFILE_BUTTON,
             cache_time=0,
             is_personal=True,
         )
@@ -91,6 +99,7 @@ def register_inline_handler(router) -> None:
             await inline_query.answer(
                 results=results,
                 next_offset=next_offset,
+                button=DEVELOPER_PROFILE_BUTTON,
                 cache_time=300,
                 is_personal=False,
             )
