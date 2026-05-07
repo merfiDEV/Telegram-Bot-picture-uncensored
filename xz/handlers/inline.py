@@ -1,18 +1,51 @@
 import logging
 
-from aiogram import F
-from aiogram.types import InlineQuery, InlineQueryResultPhoto, InlineQueryResultGif, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InlineQueryResultGif,
+    InlineQueryResultPhoto,
+    InputTextMessageContent,
+)
 
 from xz.services.bing_images import search_images
 from xz.stats import increment_error, increment_usage, record_request
 
 
+EMPTY_QUERY_RESULT = InlineQueryResultArticle(
+    id="empty-query",
+    title="\U0001f50d \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0437\u0430\u043f\u0440\u043e\u0441",
+    description="\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435, \u043a\u0430\u043a\u0443\u044e \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0443 \u043d\u0430\u0439\u0442\u0438. \u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: \u043a\u043e\u0442 \u0432 \u043e\u0447\u043a\u0430\u0445",
+    input_message_content=InputTextMessageContent(
+        message_text="\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0437\u0430\u043f\u0440\u043e\u0441 \u043f\u043e\u0441\u043b\u0435 \u0438\u043c\u0435\u043d\u0438 \u0431\u043e\u0442\u0430, \u0438 \u044f \u043d\u0430\u0439\u0434\u0443 \u043a\u0430\u0440\u0442\u0438\u043d\u043a\u0438.",
+    ),
+)
+
+
+def _has_query_text(inline_query: InlineQuery) -> bool:
+    return bool(inline_query.query.strip())
+
+
+def _is_empty_query(inline_query: InlineQuery) -> bool:
+    return not _has_query_text(inline_query)
+
+
 def register_inline_handler(router) -> None:
-    @router.inline_query(F.query.len() > 0)
+    @router.inline_query(_is_empty_query)
+    async def empty_inline_handler(inline_query: InlineQuery):
+        await inline_query.answer(
+            results=[EMPTY_QUERY_RESULT],
+            cache_time=0,
+            is_personal=True,
+        )
+
+    @router.inline_query(_has_query_text)
     async def inline_handler(inline_query: InlineQuery):
         try:
             increment_usage()
-            query = inline_query.query
+            query = inline_query.query.strip()
             offset = int(inline_query.offset) if inline_query.offset else 0
 
             image_data, consumed_count = await search_images(query, start_index=offset + 1, limit=30)
