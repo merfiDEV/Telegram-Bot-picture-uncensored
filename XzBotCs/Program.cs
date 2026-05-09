@@ -110,7 +110,7 @@ namespace XzBotCs
 
         private static string Escape(string text)
         {
-            return text.Replace("_", "\\_").Replace("*", "\\*").Replace("[", "\\[").Replace("]", "\\]").Replace("(", "\\(").Replace(")", "\\)").Replace("~", "\\~").Replace("`", "\\`").Replace(">", "\\>").Replace("#", "\\#").Replace("+", "\\+").Replace("-", "\\-").Replace("=", "\\=").Replace("|", "\\|").Replace("{", "\\{").Replace("}", "\\}").Replace(".", "\\.").Replace("!", "\\!");
+            return text.Replace("\\", "\\\\").Replace("_", "\\_").Replace("*", "\\*").Replace("[", "\\[").Replace("]", "\\]").Replace("(", "\\(").Replace(")", "\\)").Replace("~", "\\~").Replace("`", "\\`").Replace(">", "\\>").Replace("#", "\\#").Replace("+", "\\+").Replace("-", "\\-").Replace("=", "\\=").Replace("|", "\\|").Replace("{", "\\{").Replace("}", "\\}").Replace(".", "\\.").Replace("!", "\\!");
         }
 
         private static string ReadEnvValue(string line, string key)
@@ -124,7 +124,8 @@ namespace XzBotCs
             Directory.CreateDirectory(logsDir);
 
             string logPath = Path.Combine(logsDir, $"logs_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-            var fileWriter = TextWriter.Synchronized(new StreamWriter(logPath, append: true, Encoding.UTF8) { AutoFlush = true });
+            var fileStream = new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            var fileWriter = TextWriter.Synchronized(new StreamWriter(fileStream, Encoding.UTF8) { AutoFlush = true });
             var consoleOut = Console.Out;
             var consoleErr = Console.Error;
             var writer = TextWriter.Synchronized(new TeeTextWriter(consoleOut, fileWriter));
@@ -220,7 +221,18 @@ namespace XzBotCs
                         string zipPath = Path.Combine(Path.GetTempPath(), $"logs_{Guid.NewGuid():N}.zip");
                         try
                         {
-                            System.IO.Compression.ZipFile.CreateFromDirectory(logsPath, zipPath);
+                            using (var fs = new FileStream(zipPath, FileMode.Create))
+                            using (var archive = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+                            {
+                                foreach (var file in Directory.GetFiles(logsPath))
+                                {
+                                    var entry = archive.CreateEntry(Path.GetFileName(file));
+                                    using var entryStream = entry.Open();
+                                    using var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                                    fileStream.CopyTo(entryStream);
+                                }
+                            }
+
                             using var stream = System.IO.File.OpenRead(zipPath);
                             await botClient.SendDocument(message.Chat.Id, InputFile.FromStream(stream, "logs.zip"), cancellationToken: cancellationToken);
                         }
