@@ -58,7 +58,7 @@ namespace XzBotCs.Services
             }
 
             string encodedQuery = HttpUtility.UrlEncode(query);
-            string fetchUrl = $"https://www.bing.com/images/search?q={encodedQuery}&adlt=off&first={startIndex}";
+            string fetchUrl = $"https://www.bing.com/images/search?q={encodedQuery}&adlt=off&safeSearch=Off&setmkt=en-US&setlang=en-US&first={startIndex}";
             if (!string.IsNullOrEmpty(bingFilters))
             {
                 fetchUrl += $"&qft={bingFilters}";
@@ -67,7 +67,8 @@ namespace XzBotCs.Services
             try
             {
                 var request = new HttpRequestMessage(HttpMethod.Get, fetchUrl);
-                request.Headers.Add("Cookie", "SRCHHPGUSR=ADLT=OFF");
+                request.Headers.Add("Cookie", "SRCHHPGUSR=ADLT=OFF&NRSLT=50");
+                request.Headers.Add("Accept-Language", "en-US,en;q=0.9");
                 var stopwatch = Stopwatch.StartNew();
                 var response = await _httpClient.SendAsync(request);
                 stopwatch.Stop();
