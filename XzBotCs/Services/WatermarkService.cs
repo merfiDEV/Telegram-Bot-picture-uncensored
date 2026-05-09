@@ -12,7 +12,7 @@ namespace XzBotCs.Services
 
     public class WatermarkService
     {
-        private const string WatermarkText = "Грешок";
+        private const string WatermarkText = "Грешок by MDEV";
 
         public byte[] ApplyWatermark(byte[] imageBytes)
         {
@@ -47,7 +47,7 @@ namespace XzBotCs.Services
                 canvas.Clear(SKColors.White);
                 canvas.DrawBitmap(bitmap, new SKRect(0, 0, width, height));
 
-                float textSize = Math.Max(22f, width / 15f);
+                float textSize = Math.Max(16f, width / 25f);
                 using var typeface = SKTypeface.FromFamilyName("Arial", SKFontStyleWeight.Bold, SKFontStyleWidth.Normal, SKFontStyleSlant.Upright);
                 using var font = new SKFont(typeface, textSize);
 
