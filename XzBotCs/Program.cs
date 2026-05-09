@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
@@ -26,15 +28,20 @@ namespace XzBotCs
         private static BotStatsService _statsService = new BotStatsService(_state);
         private static HttpClient _httpClient = new HttpClient();
         private static long? _adminId;
+        private static long? _cacheChatId;
         private static string? _proxyBaseUrl;
+        private static volatile bool _proxyListenerStarted;
+        private static readonly SemaphoreSlim _watermarkUploadLock = new SemaphoreSlim(3);
 
         private const int DefaultProxyPort = 8080;
+        private const string DefaultProxyBaseUrl = "http://46.229.63.243:8080/img?u=";
         private const string DeveloperProfileUrl = "https://t.me/Tyta_Zdesyaa777";
 
         static async Task Main(string[] args)
         {
             string? token = Environment.GetEnvironmentVariable("BOT_TOKEN");
             string? adminIdStr = Environment.GetEnvironmentVariable("ADMIN_ID");
+            string? cacheChatIdStr = Environment.GetEnvironmentVariable("CACHE_CHAT_ID");
             string? proxyBaseUrl = Environment.GetEnvironmentVariable("PROXY_BASE_URL")
                 ?? Environment.GetEnvironmentVariable("PUBLIC_BASE_URL");
             string? proxyPortStr = Environment.GetEnvironmentVariable("PROXY_PORT");
@@ -46,6 +53,7 @@ namespace XzBotCs
                 {
                     if (line.StartsWith("BOT_TOKEN=")) token = ReadEnvValue(line, "BOT_TOKEN=");
                     if (line.StartsWith("ADMIN_ID=")) adminIdStr = ReadEnvValue(line, "ADMIN_ID=");
+                    if (line.StartsWith("CACHE_CHAT_ID=")) cacheChatIdStr = ReadEnvValue(line, "CACHE_CHAT_ID=");
                     if (line.StartsWith("PROXY_BASE_URL=")) proxyBaseUrl = ReadEnvValue(line, "PROXY_BASE_URL=");
                     if (line.StartsWith("PUBLIC_BASE_URL=")) proxyBaseUrl = ReadEnvValue(line, "PUBLIC_BASE_URL=");
                     if (line.StartsWith("PROXY_PORT=")) proxyPortStr = ReadEnvValue(line, "PROXY_PORT=");
@@ -59,8 +67,10 @@ namespace XzBotCs
             }
 
             if (long.TryParse(adminIdStr, out long aid)) _adminId = aid;
+            if (long.TryParse(cacheChatIdStr, out long cid)) _cacheChatId = cid;
+            else _cacheChatId = _adminId;
             int proxyPort = int.TryParse(proxyPortStr, out int parsedProxyPort) ? parsedProxyPort : DefaultProxyPort;
-            _proxyBaseUrl = NormalizeProxyBaseUrl(proxyBaseUrl);
+            _proxyBaseUrl = NormalizeProxyBaseUrl(proxyBaseUrl ?? DefaultProxyBaseUrl);
             SetupLogging();
 
             _botClient = new TelegramBotClient(token);
@@ -281,7 +291,8 @@ namespace XzBotCs
                 int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
                 Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}");
                 _statsService.IncrementUsage();
-                var searchResponse = await _searchService.SearchImagesDetailedAsync(query, startIndex: offset + 1, limit: 30);
+                int resultLimit = _state.IsWatermarkEnabled ? 6 : 30;
+                var searchResponse = await _searchService.SearchImagesDetailedAsync(query, startIndex: offset + 1, limit: resultLimit);
                 if (searchResponse.ResponseTime > TimeSpan.Zero)
                 {
                     _statsService.RecordResponseTime(searchResponse.ResponseTime);
@@ -294,6 +305,20 @@ namespace XzBotCs
                 var searchResults = searchResponse.Items;
                 Console.WriteLine($"Search returned {searchResults.Count} results for '{query}'");
 
+                var watermarkedFileIds = new Dictionary<string, string?>();
+                if (_state.IsWatermarkEnabled)
+                {
+                    var uploadTasks = searchResults
+                        .Where(item => !item.IsGif)
+                        .Select(async item => (item.Id, FileId: await GetOrUploadWatermarkedPhotoFileIdAsync(item, cancellationToken)))
+                        .ToArray();
+
+                    foreach (var upload in await Task.WhenAll(uploadTasks))
+                    {
+                        watermarkedFileIds[upload.Id] = upload.FileId;
+                    }
+                }
+
                 var results = new List<InlineQueryResult>();
                 foreach (var item in searchResults)
                 {
@@ -301,7 +326,17 @@ namespace XzBotCs
                     string thumbnailUrl = string.IsNullOrEmpty(item.ThumbnailUrl) ? item.Url : item.ThumbnailUrl;
                     if (_state.IsWatermarkEnabled && !item.IsGif)
                     {
-                        finalUrl = BuildProxyImageUrl(item.Url);
+                        watermarkedFileIds.TryGetValue(item.Id, out string? fileId);
+                        if (!string.IsNullOrEmpty(fileId))
+                        {
+                            results.Add(new InlineQueryResultCachedPhoto(item.Id, fileId)
+                            {
+                                ReplyMarkup = BuildSourceMarkup(item)
+                            });
+                            continue;
+                        }
+
+                        finalUrl = item.Url;
                     }
 
                     if (item.IsGif)
@@ -321,16 +356,16 @@ namespace XzBotCs
                 }
 
                 string nextOffset = searchResponse.ConsumedCount > 0 ? (offset + searchResponse.ConsumedCount).ToString() : "";
-                await botClient.AnswerInlineQuery(
+                bool answered = await TryAnswerInlineQueryAsync(
+                    botClient,
                     inlineQuery.Id,
                     results,
                     cacheTime: 300,
                     isPersonal: false,
                     nextOffset: nextOffset,
-                    button: BuildDeveloperInlineButton(),
                     cancellationToken: cancellationToken);
 
-                _statsService.RecordRequest(inlineQuery.From.Id, inlineQuery.From.Username, query, searchResults.Count > 0 && string.IsNullOrEmpty(searchResponse.ErrorType));
+                _statsService.RecordRequest(inlineQuery.From.Id, inlineQuery.From.Username, query, answered && searchResults.Count > 0 && string.IsNullOrEmpty(searchResponse.ErrorType));
                 _state.Save();
             }
         }
@@ -389,13 +424,89 @@ namespace XzBotCs
 
         private static string BuildProxyImageUrl(string imageUrl)
         {
-            if (string.IsNullOrEmpty(_proxyBaseUrl))
+            if (string.IsNullOrEmpty(_proxyBaseUrl) || !_proxyListenerStarted)
             {
                 return imageUrl;
             }
 
             string b64Url = Convert.ToBase64String(Encoding.UTF8.GetBytes(imageUrl));
             return $"{_proxyBaseUrl}{WebUtility.UrlEncode(b64Url)}";
+        }
+
+        private static async Task<string?> GetOrUploadWatermarkedPhotoFileIdAsync(BingImageResult item, CancellationToken cancellationToken)
+        {
+            if (_botClient == null || _cacheChatId == null)
+            {
+                return null;
+            }
+
+            if (_state.WatermarkFileIds.TryGetValue(item.Id, out string? cachedFileId) && !string.IsNullOrEmpty(cachedFileId))
+            {
+                return cachedFileId;
+            }
+
+            await _watermarkUploadLock.WaitAsync(cancellationToken);
+            try
+            {
+                if (_state.WatermarkFileIds.TryGetValue(item.Id, out cachedFileId) && !string.IsNullOrEmpty(cachedFileId))
+                {
+                    return cachedFileId;
+                }
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, item.Url);
+                request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+                request.Headers.TryAddWithoutValidation("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"Watermark cache download failed: {(int)response.StatusCode} {item.Url}");
+                    return null;
+                }
+
+                string contentType = response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+                if (!contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"Watermark cache skipped non-image content-type '{contentType}': {item.Url}");
+                    return null;
+                }
+
+                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                var result = _watermarkService.ApplyWatermarkOrOriginal(bytes, contentType);
+                if (!result.IsWatermarked)
+                {
+                    Console.WriteLine($"Watermark cache skipped unsupported image: {item.Url}");
+                    return null;
+                }
+
+                using var stream = new MemoryStream(result.Bytes);
+                var message = await _botClient.SendPhoto(
+                    new ChatId(_cacheChatId.Value),
+                    InputFile.FromStream(stream, $"{item.Id}.jpg"),
+                    disableNotification: true,
+                    cancellationToken: cancellationToken);
+
+                string? fileId = message.Photo?.OrderByDescending(photo => photo.Width * photo.Height).FirstOrDefault()?.FileId;
+                if (string.IsNullOrEmpty(fileId))
+                {
+                    Console.WriteLine($"Watermark cache upload did not return photo file_id: {item.Url}");
+                    return null;
+                }
+
+                _state.WatermarkFileIds[item.Id] = fileId;
+                _state.Save();
+                return fileId;
+            }
+            catch (Exception ex)
+            {
+                _statsService.RecordError("watermark_cache");
+                Console.WriteLine($"Watermark cache error: {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                _watermarkUploadLock.Release();
+            }
         }
 
         private static InlineQueryResultsButton BuildDeveloperInlineButton()
@@ -416,13 +527,42 @@ namespace XzBotCs
                 Description = "Напишите, какую картинку найти. Например: кот в очках"
             };
 
-            await botClient.AnswerInlineQuery(
+            await TryAnswerInlineQueryAsync(
+                botClient,
                 inlineQueryId,
                 new[] { emptyResult },
                 cacheTime: 0,
                 isPersonal: true,
-                button: BuildDeveloperInlineButton(),
                 cancellationToken: cancellationToken);
+        }
+
+        private static async Task<bool> TryAnswerInlineQueryAsync(
+            ITelegramBotClient botClient,
+            string inlineQueryId,
+            IEnumerable<InlineQueryResult> results,
+            int cacheTime,
+            bool isPersonal,
+            string nextOffset = "",
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await botClient.AnswerInlineQuery(
+                    inlineQueryId,
+                    results,
+                    cacheTime: cacheTime,
+                    isPersonal: isPersonal,
+                    nextOffset: nextOffset,
+                    button: BuildDeveloperInlineButton(),
+                    cancellationToken: cancellationToken);
+                return true;
+            }
+            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("query is too old", StringComparison.OrdinalIgnoreCase))
+            {
+                _statsService.RecordError("inline_timeout");
+                Console.WriteLine($"Inline answer skipped: Telegram query expired ({ex.Message})");
+                return false;
+            }
         }
 
         private static InlineKeyboardMarkup BuildSourceMarkup(BingImageResult item)
@@ -439,52 +579,153 @@ namespace XzBotCs
 
         static async Task StartProxyAsync(int port, CancellationToken ct)
         {
-            HttpListener listener = new HttpListener();
-            listener.Prefixes.Add($"http://*:{port}/");
+            var listener = new TcpListener(IPAddress.Any, port);
             try
             {
                 listener.Start();
+                _proxyListenerStarted = true;
                 Console.WriteLine($"Proxy started on port {port}");
 
                 while (!ct.IsCancellationRequested)
                 {
-                    var context = await listener.GetContextAsync();
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            string? b64Url = context.Request.QueryString["u"];
-                            if (string.IsNullOrEmpty(b64Url))
-                            {
-                                context.Response.StatusCode = 400;
-                                context.Response.Close();
-                                return;
-                            }
-
-                            string url = Encoding.UTF8.GetString(Convert.FromBase64String(b64Url));
-                            var bytes = await _httpClient.GetByteArrayAsync(url);
-                            var processed = _watermarkService.ApplyWatermark(bytes);
-
-                            context.Response.ContentType = "image/jpeg";
-                            context.Response.ContentLength64 = processed.Length;
-                            await context.Response.OutputStream.WriteAsync(processed, 0, processed.Length);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Proxy error: {ex.Message}");
-                            context.Response.StatusCode = 500;
-                        }
-                        finally
-                        {
-                            context.Response.Close();
-                        }
-                    });
+                    var client = await listener.AcceptTcpClientAsync(ct);
+                    _ = Task.Run(() => HandleProxyClientAsync(client, ct), ct);
                 }
             }
             catch (Exception ex)
             {
+                _proxyListenerStarted = false;
                 Console.WriteLine($"Listener error: {ex.Message}");
+                Console.WriteLine("Watermark proxy disabled. Inline results will use original image URLs.");
             }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+
+        static async Task HandleProxyClientAsync(TcpClient client, CancellationToken ct)
+        {
+            await using var stream = client.GetStream();
+            using (client)
+            {
+                try
+                {
+                    string requestText = await ReadHttpRequestAsync(stream, ct);
+                    string? b64Url = ExtractProxyUrlParameter(requestText);
+                    if (string.IsNullOrEmpty(b64Url))
+                    {
+                        await WriteTextResponseAsync(stream, 400, "Bad Request", "Missing u parameter", ct);
+                        return;
+                    }
+
+                    string url = Encoding.UTF8.GetString(Convert.FromBase64String(b64Url));
+                    using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+                    request.Headers.TryAddWithoutValidation("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
+
+                    using var imageResponse = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                    if (!imageResponse.IsSuccessStatusCode)
+                    {
+                        await WriteTextResponseAsync(stream, (int)imageResponse.StatusCode, imageResponse.ReasonPhrase ?? "Upstream Error", "Upstream image request failed", ct);
+                        return;
+                    }
+
+                    string originalContentType = imageResponse.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+                    if (!originalContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await WriteTextResponseAsync(stream, 415, "Unsupported Media Type", "Upstream response is not an image", ct);
+                        return;
+                    }
+
+                    var bytes = await imageResponse.Content.ReadAsByteArrayAsync(ct);
+                    var result = _watermarkService.ApplyWatermarkOrOriginal(bytes, originalContentType);
+                    if (!result.IsWatermarked)
+                    {
+                        await WriteRedirectResponseAsync(stream, url, ct);
+                        return;
+                    }
+
+                    await WriteBinaryResponseAsync(stream, result.ContentType, result.Bytes, ct);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Proxy error: {ex.Message}");
+                    await WriteTextResponseAsync(stream, 500, "Internal Server Error", "Proxy error", CancellationToken.None);
+                }
+            }
+        }
+
+        static async Task<string> ReadHttpRequestAsync(NetworkStream stream, CancellationToken ct)
+        {
+            var buffer = new byte[8192];
+            int total = 0;
+
+            while (total < buffer.Length)
+            {
+                int read = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct);
+                if (read <= 0) break;
+
+                total += read;
+                string current = Encoding.ASCII.GetString(buffer, 0, total);
+                if (current.Contains("\r\n\r\n")) return current;
+            }
+
+            return Encoding.ASCII.GetString(buffer, 0, total);
+        }
+
+        static string? ExtractProxyUrlParameter(string requestText)
+        {
+            string firstLine = requestText.Split("\r\n", StringSplitOptions.None).FirstOrDefault() ?? "";
+            string[] parts = firstLine.Split(' ');
+            if (parts.Length < 2) return null;
+
+            string target = parts[1];
+            int queryIndex = target.IndexOf("?u=", StringComparison.OrdinalIgnoreCase);
+            if (queryIndex < 0) return null;
+
+            string value = target.Substring(queryIndex + 3);
+            int ampIndex = value.IndexOf('&');
+            if (ampIndex >= 0) value = value.Substring(0, ampIndex);
+
+            return WebUtility.UrlDecode(value);
+        }
+
+        static async Task WriteBinaryResponseAsync(NetworkStream stream, string contentType, byte[] bytes, CancellationToken ct)
+        {
+            string headers =
+                "HTTP/1.1 200 OK\r\n" +
+                $"Content-Type: {contentType}\r\n" +
+                $"Content-Length: {bytes.Length}\r\n" +
+                "Cache-Control: public, max-age=86400\r\n" +
+                "Connection: close\r\n\r\n";
+
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(headers), ct);
+            await stream.WriteAsync(bytes, ct);
+        }
+
+        static async Task WriteRedirectResponseAsync(NetworkStream stream, string location, CancellationToken ct)
+        {
+            string headers =
+                "HTTP/1.1 302 Found\r\n" +
+                $"Location: {location}\r\n" +
+                "Content-Length: 0\r\n" +
+                "Connection: close\r\n\r\n";
+
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(headers), ct);
+        }
+
+        static async Task WriteTextResponseAsync(NetworkStream stream, int statusCode, string reason, string body, CancellationToken ct)
+        {
+            byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
+            string headers =
+                $"HTTP/1.1 {statusCode} {reason}\r\n" +
+                "Content-Type: text/plain; charset=utf-8\r\n" +
+                $"Content-Length: {bodyBytes.Length}\r\n" +
+                "Connection: close\r\n\r\n";
+
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(headers), ct);
+            await stream.WriteAsync(bodyBytes, ct);
         }
     }
 }

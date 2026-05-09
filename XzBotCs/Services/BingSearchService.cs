@@ -31,6 +31,7 @@ namespace XzBotCs.Services
     public class BingSearchService
     {
         private static readonly HttpClient _httpClient = new HttpClient(new HttpClientHandler { UseCookies = true });
+        private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(650);
 
         static BingSearchService()
         {
@@ -77,8 +78,6 @@ namespace XzBotCs.Services
                 var blocks = Regex.Matches(html, @"m=""({.*?})""");
                 searchResponse.ConsumedCount = blocks.Count;
                 var seenHashes = new HashSet<string>();
-                var potentialItems = new List<BingImageResult>();
-                var validationTasks = new List<Task<(bool IsValid, bool IsGif)>>();
 
                 foreach (Match blockMatch in blocks)
                 {
@@ -97,34 +96,15 @@ namespace XzBotCs.Services
                     if (!murl.StartsWith("http")) continue;
                     if (murl.Contains("<") || murl.Contains(">") || murl.Contains("\"") || murl.Contains(" ")) continue;
 
-                    potentialItems.Add(new BingImageResult
-                    {
-                        Url = murl,
-                        ThumbnailUrl = turl,
-                        SourceUrl = purl
-                    });
-                    validationTasks.Add(IsValidImageAsync(murl));
-
-                    if (validationTasks.Count >= limit * 2) break;
-                }
-
-                var validationResults = await Task.WhenAll(validationTasks);
-
-                for (int i = 0; i < potentialItems.Count; i++)
-                {
-                    var item = potentialItems[i];
-                    var (isValid, isGif) = validationResults[i];
-                    if (!isValid) continue;
-                    if (isGifSearch && !isGif) continue;
-
-                    string imageHash = GetImageHash(item.Url);
+                    bool isGif = isGifSearch || murl.ToLowerInvariant().Split('?')[0].EndsWith(".gif");
+                    string imageHash = GetImageHash(murl);
                     if (!seenHashes.Add(imageHash)) continue;
 
                     results.Add(new BingImageResult
                     {
-                        Url = item.Url,
-                        ThumbnailUrl = item.ThumbnailUrl,
-                        SourceUrl = item.SourceUrl,
+                        Url = murl,
+                        ThumbnailUrl = turl,
+                        SourceUrl = purl,
                         Id = imageHash,
                         IsGif = isGif
                     });
@@ -205,7 +185,7 @@ namespace XzBotCs.Services
                 }
             }
 
-            foreach (var headers in new[] { "bytes=0-0", null })
+            foreach (var headers in new[] { "bytes=0-0" })
             {
                 var get = await RequestImageMetadataAsync(HttpMethod.Get, url, headers);
                 if (get.Response == null) continue;
@@ -229,7 +209,7 @@ namespace XzBotCs.Services
         {
             try
             {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                using var cts = new CancellationTokenSource(ImageMetadataTimeout);
                 using var request = new HttpRequestMessage(method, url);
                 if (range != null)
                 {
