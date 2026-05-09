@@ -164,209 +164,226 @@ namespace XzBotCs
 
         static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
-            if (update.Message is { } message && message.Text is { } messageText)
+            try
             {
-                if (messageText.StartsWith("/start"))
+                if (update.Message is { } message && message.Text is { } messageText)
                 {
-                    if (messageText.Contains("developer"))
+                    if (messageText.StartsWith("/start"))
                     {
-                        var devBtn = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("💻 Открыть профиль", DeveloperProfileUrl));
-                        await botClient.SendMessage(message.Chat.Id, "💻 *Профиль разработчика*", parseMode: ParseMode.Markdown, replyMarkup: devBtn, cancellationToken: cancellationToken);
-                        return;
-                    }
-
-                    string text = "*🤖 Бот работает в асинхронном inline режиме!*\n\n" +
-                                 "Чтобы использовать бота, откройте любой чат и введите:\n" +
-                                 "`@имя_бота ваш_запрос`\n\n" +
-                                 "⚡ *Новинка:* Используйте флаг `--gif` в конце запроса для поиска анимаций.\n\n" +
-                                 "⚠️ *Дисклеймер*\n" +
-                                 "Данный бот автоматически обрабатывает поисковые запросы пользователей и " +
-                                 "показывает результаты из *открытых источников* в интернете.\n\n" +
-                                 "*Важные правила:*\n" +
-                                 "— Создатель не хранит и не модерирует контент\n" +
-                                 "— Вся ответственность за запросы лежит на пользователе\n" +
-                                 "— Используя бота, вы подтверждаете соблюдение законов вашей страны";
-                    
-                    var builder = new InlineKeyboardMarkup(InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("🔍 Попробовать поиск", ""));
-                    await botClient.SendMessage(message.Chat.Id, text, parseMode: ParseMode.Markdown, replyMarkup: builder, cancellationToken: cancellationToken);
-                }
-                else if (messageText == "/stats")
-                {
-                    if (_adminId == null || message.From?.Id != _adminId)
-                    {
-                        await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
-                        return;
-                    }
-                    await SendStatsAsync(message.Chat.Id, cancellationToken);
-                }
-                else if (messageText == "/logs")
-                {
-                    if (message.Chat.Type != ChatType.Private)
-                    {
-                        await botClient.SendMessage(message.Chat.Id, "Доступно только в ЛС", cancellationToken: cancellationToken);
-                        return;
-                    }
-
-                    if (_adminId == null || message.From?.Id != _adminId)
-                    {
-                        await botClient.SendMessage(message.Chat.Id, "Нет доступа :/", cancellationToken: cancellationToken);
-                        return;
-                    }
-
-                    string logsPath = "../logs";
-                    if (!Directory.Exists(logsPath)) Directory.CreateDirectory(logsPath);
-
-                    string zipPath = Path.Combine(Path.GetTempPath(), $"logs_{Guid.NewGuid():N}.zip");
-                    try
-                    {
-                        System.IO.Compression.ZipFile.CreateFromDirectory(logsPath, zipPath);
-                        using var stream = System.IO.File.OpenRead(zipPath);
-                        await botClient.SendDocument(message.Chat.Id, InputFile.FromStream(stream, "logs.zip"), cancellationToken: cancellationToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        await botClient.SendMessage(message.Chat.Id, $"Ошибка при сборе логов: {Escape(ex.Message)}", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
-                    }
-                    finally
-                    {
-                        if (System.IO.File.Exists(zipPath)) System.IO.File.Delete(zipPath);
-                    }
-                }
-            }
-            else if (update.CallbackQuery is { } callbackQuery)
-            {
-                if (_adminId == null || callbackQuery.From.Id != _adminId)
-                {
-                    await botClient.AnswerCallbackQuery(callbackQuery.Id, "⛔ Нет доступа", showAlert: true, cancellationToken: cancellationToken);
-                    return;
-                }
-
-                if (callbackQuery.Data == "toggle_wm")
-                {
-                    _state.IsWatermarkEnabled = !_state.IsWatermarkEnabled;
-                    _state.Save();
-                    await botClient.AnswerCallbackQuery(callbackQuery.Id, $"Ватермарка: {(_state.IsWatermarkEnabled ? "ВКЛ" : "ВЫКЛ")}", cancellationToken: cancellationToken);
-                    await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                }
-                else if (callbackQuery.Data == "stats:refresh")
-                {
-                    await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                    await botClient.AnswerCallbackQuery(callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
-                }
-                else if (callbackQuery.Data == "stats:back")
-                {
-                    await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                    await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
-                }
-                else if (callbackQuery.Data == "stats:metrics")
-                {
-                    string text = _statsService.BuildMetricsText();
-                    var markup = new InlineKeyboardMarkup(new[] { 
-                        new [] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") },
-                        new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:metrics") }
-                    });
-                    await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
-                    await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
-                }
-                else if (callbackQuery.Data == "stats:dashboard")
-                {
-                    string text = _statsService.BuildDashboardText();
-                    var markup = new InlineKeyboardMarkup(new[] {
-                        new [] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") },
-                        new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:dashboard") }
-                    });
-                    await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
-                    await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
-                }
-            }
-            else if (update.InlineQuery is { } inlineQuery)
-            {
-                string query = inlineQuery.Query.Trim();
-                if (string.IsNullOrEmpty(query))
-                {
-                    await AnswerEmptyInlineQuery(botClient, inlineQuery.Id, cancellationToken);
-                    return;
-                }
-
-                int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
-                Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}");
-                _statsService.IncrementUsage();
-                int resultLimit = _state.IsWatermarkEnabled ? 6 : 30;
-                var searchResponse = await _searchService.SearchImagesDetailedAsync(query, startIndex: offset + 1, limit: resultLimit);
-                if (searchResponse.ResponseTime > TimeSpan.Zero)
-                {
-                    _statsService.RecordResponseTime(searchResponse.ResponseTime);
-                }
-                if (!string.IsNullOrEmpty(searchResponse.ErrorType))
-                {
-                    _statsService.RecordError(searchResponse.ErrorType);
-                }
-
-                var searchResults = searchResponse.Items;
-                Console.WriteLine($"Search returned {searchResults.Count} results for '{query}'");
-
-                var watermarkedFileIds = new Dictionary<string, string?>();
-                if (_state.IsWatermarkEnabled)
-                {
-                    var uploadTasks = searchResults
-                        .Where(item => !item.IsGif)
-                        .Select(async item => (item.Id, FileId: await GetOrUploadWatermarkedPhotoFileIdAsync(item, cancellationToken)))
-                        .ToArray();
-
-                    foreach (var upload in await Task.WhenAll(uploadTasks))
-                    {
-                        watermarkedFileIds[upload.Id] = upload.FileId;
-                    }
-                }
-
-                var results = new List<InlineQueryResult>();
-                foreach (var item in searchResults)
-                {
-                    string finalUrl = item.Url;
-                    string thumbnailUrl = string.IsNullOrEmpty(item.ThumbnailUrl) ? item.Url : item.ThumbnailUrl;
-                    if (_state.IsWatermarkEnabled && !item.IsGif)
-                    {
-                        watermarkedFileIds.TryGetValue(item.Id, out string? fileId);
-                        if (!string.IsNullOrEmpty(fileId))
+                        if (messageText.Contains("developer"))
                         {
-                            results.Add(new InlineQueryResultCachedPhoto(item.Id, fileId)
+                            var devBtn = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("💻 Открыть профиль", DeveloperProfileUrl));
+                            await botClient.SendMessage(message.Chat.Id, "💻 *Профиль разработчика*", parseMode: ParseMode.Markdown, replyMarkup: devBtn, cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string text = "*🤖 Бот работает в асинхронном inline режиме!*\n\n" +
+                                     "Чтобы использовать бота, откройте любой чат и введите:\n" +
+                                     "`@имя_бота ваш_запрос`\n\n" +
+                                     "⚡ *Новинка:* Используйте флаг `--gif` в конце запроса для поиска анимаций.\n\n" +
+                                     "⚠️ *Дисклеймер*\n" +
+                                     "Данный бот автоматически обрабатывает поисковые запросы пользователей и " +
+                                     "показывает результаты из *открытых источников* в интернете.\n\n" +
+                                     "*Важные правила:*\n" +
+                                     "— Создатель не хранит и не модерирует контент\n" +
+                                     "— Вся ответственность за запросы лежит на пользователе\n" +
+                                     "— Используя бота, вы подтверждаете соблюдение законов вашей страны";
+                        
+                        var builder = new InlineKeyboardMarkup(InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("🔍 Попробовать поиск", ""));
+                        await botClient.SendMessage(message.Chat.Id, text, parseMode: ParseMode.Markdown, replyMarkup: builder, cancellationToken: cancellationToken);
+                    }
+                    else if (messageText == "/stats")
+                    {
+                        if (_adminId == null || message.From?.Id != _adminId)
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            return;
+                        }
+                        await SendStatsAsync(message.Chat.Id, cancellationToken);
+                    }
+                    else if (messageText == "/logs")
+                    {
+                        if (message.Chat.Type != ChatType.Private)
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "Доступно только в ЛС", cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        if (_adminId == null || message.From?.Id != _adminId)
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "Нет доступа :/", cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string logsPath = "../logs";
+                        if (!Directory.Exists(logsPath)) Directory.CreateDirectory(logsPath);
+
+                        string zipPath = Path.Combine(Path.GetTempPath(), $"logs_{Guid.NewGuid():N}.zip");
+                        try
+                        {
+                            System.IO.Compression.ZipFile.CreateFromDirectory(logsPath, zipPath);
+                            using var stream = System.IO.File.OpenRead(zipPath);
+                            await botClient.SendDocument(message.Chat.Id, InputFile.FromStream(stream, "logs.zip"), cancellationToken: cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            await botClient.SendMessage(message.Chat.Id, $"Ошибка при сборе логов: {Escape(ex.Message)}", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                        }
+                        finally
+                        {
+                            if (System.IO.File.Exists(zipPath)) System.IO.File.Delete(zipPath);
+                        }
+                    }
+                }
+                else if (update.CallbackQuery is { } callbackQuery)
+                {
+                    if (_adminId == null || callbackQuery.From.Id != _adminId)
+                    {
+                        await botClient.AnswerCallbackQuery(callbackQuery.Id, "⛔ Нет доступа", showAlert: true, cancellationToken: cancellationToken);
+                        return;
+                    }
+
+                    if (callbackQuery.Data == "toggle_wm")
+                    {
+                        _state.IsWatermarkEnabled = !_state.IsWatermarkEnabled;
+                        _state.Save();
+                        await botClient.AnswerCallbackQuery(callbackQuery.Id, $"Ватермарка: {(_state.IsWatermarkEnabled ? "ВКЛ" : "ВЫКЛ")}", cancellationToken: cancellationToken);
+                        await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
+                    }
+                    else if (callbackQuery.Data == "stats:refresh")
+                    {
+                        await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
+                        await botClient.AnswerCallbackQuery(callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data == "stats:back")
+                    {
+                        await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
+                        await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data == "stats:metrics")
+                    {
+                        string text = _statsService.BuildMetricsText();
+                        var markup = new InlineKeyboardMarkup(new[] { 
+                            new [] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") },
+                            new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:metrics") }
+                        });
+                        try
+                        {
+                            await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                        }
+                        catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
+                        
+                        await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data == "stats:dashboard")
+                    {
+                        string text = _statsService.BuildDashboardText();
+                        var markup = new InlineKeyboardMarkup(new[] {
+                            new [] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") },
+                            new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:dashboard") }
+                        });
+                        try
+                        {
+                            await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                        }
+                        catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
+
+                        await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+                    }
+                }
+                else if (update.InlineQuery is { } inlineQuery)
+                {
+                    string query = inlineQuery.Query.Trim();
+                    if (string.IsNullOrEmpty(query))
+                    {
+                        await AnswerEmptyInlineQuery(botClient, inlineQuery.Id, cancellationToken);
+                        return;
+                    }
+
+                    int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
+                    Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}");
+                    _statsService.IncrementUsage();
+                    int resultLimit = _state.IsWatermarkEnabled ? 6 : 30;
+                    var searchResponse = await _searchService.SearchImagesDetailedAsync(query, startIndex: offset + 1, limit: resultLimit);
+                    if (searchResponse.ResponseTime > TimeSpan.Zero)
+                    {
+                        _statsService.RecordResponseTime(searchResponse.ResponseTime);
+                    }
+                    if (!string.IsNullOrEmpty(searchResponse.ErrorType))
+                    {
+                        _statsService.RecordError(searchResponse.ErrorType);
+                    }
+
+                    var searchResults = searchResponse.Items;
+                    Console.WriteLine($"Search returned {searchResults.Count} results for '{query}'");
+
+                    var watermarkedFileIds = new Dictionary<string, string?>();
+                    if (_state.IsWatermarkEnabled)
+                    {
+                        var uploadTasks = searchResults
+                            .Where(item => !item.IsGif)
+                            .Select(async item => (item.Id, FileId: await GetOrUploadWatermarkedPhotoFileIdAsync(item, cancellationToken)))
+                            .ToArray();
+
+                        foreach (var upload in await Task.WhenAll(uploadTasks))
+                        {
+                            watermarkedFileIds[upload.Id] = upload.FileId;
+                        }
+                    }
+
+                    var results = new List<InlineQueryResult>();
+                    foreach (var item in searchResults)
+                    {
+                        string finalUrl = item.Url;
+                        string thumbnailUrl = string.IsNullOrEmpty(item.ThumbnailUrl) ? item.Url : item.ThumbnailUrl;
+                        if (_state.IsWatermarkEnabled && !item.IsGif)
+                        {
+                            watermarkedFileIds.TryGetValue(item.Id, out string? fileId);
+                            if (!string.IsNullOrEmpty(fileId))
+                            {
+                                results.Add(new InlineQueryResultCachedPhoto(item.Id, fileId)
+                                {
+                                    ReplyMarkup = BuildSourceMarkup(item)
+                                });
+                                continue;
+                            }
+
+                            finalUrl = item.Url;
+                        }
+
+                        if (item.IsGif)
+                        {
+                            results.Add(new InlineQueryResultGif(item.Id, finalUrl, thumbnailUrl)
                             {
                                 ReplyMarkup = BuildSourceMarkup(item)
                             });
-                            continue;
                         }
-
-                        finalUrl = item.Url;
-                    }
-
-                    if (item.IsGif)
-                    {
-                        results.Add(new InlineQueryResultGif(item.Id, finalUrl, thumbnailUrl)
+                        else
                         {
-                            ReplyMarkup = BuildSourceMarkup(item)
-                        });
+                            results.Add(new InlineQueryResultPhoto(item.Id, finalUrl, thumbnailUrl)
+                            {
+                                ReplyMarkup = BuildSourceMarkup(item)
+                            });
+                        }
                     }
-                    else
-                    {
-                        results.Add(new InlineQueryResultPhoto(item.Id, finalUrl, thumbnailUrl)
-                        {
-                            ReplyMarkup = BuildSourceMarkup(item)
-                        });
-                    }
+
+                    string nextOffset = searchResponse.ConsumedCount > 0 ? (offset + searchResponse.ConsumedCount).ToString() : "";
+                    bool answered = await TryAnswerInlineQueryAsync(
+                        botClient,
+                        inlineQuery.Id,
+                        results,
+                        cacheTime: 300,
+                        isPersonal: false,
+                        nextOffset: nextOffset,
+                        cancellationToken: cancellationToken);
+
+                    _statsService.RecordRequest(inlineQuery.From.Id, inlineQuery.From.Username, query, answered && searchResults.Count > 0 && string.IsNullOrEmpty(searchResponse.ErrorType));
+                    _state.Save();
                 }
-
-                string nextOffset = searchResponse.ConsumedCount > 0 ? (offset + searchResponse.ConsumedCount).ToString() : "";
-                bool answered = await TryAnswerInlineQueryAsync(
-                    botClient,
-                    inlineQuery.Id,
-                    results,
-                    cacheTime: 300,
-                    isPersonal: false,
-                    nextOffset: nextOffset,
-                    cancellationToken: cancellationToken);
-
-                _statsService.RecordRequest(inlineQuery.From.Id, inlineQuery.From.Username, query, answered && searchResults.Count > 0 && string.IsNullOrEmpty(searchResponse.ErrorType));
-                _state.Save();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Update handler error: {ex}");
             }
         }
 
@@ -398,6 +415,7 @@ namespace XzBotCs
             {
                 await _botClient!.EditMessageText(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
             }
+            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
             catch { }
         }
 
@@ -591,6 +609,11 @@ namespace XzBotCs
                     var client = await listener.AcceptTcpClientAsync(ct);
                     _ = Task.Run(() => HandleProxyClientAsync(client, ct), ct);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                _proxyListenerStarted = false;
+                Console.WriteLine("Proxy listener stopped.");
             }
             catch (Exception ex)
             {
