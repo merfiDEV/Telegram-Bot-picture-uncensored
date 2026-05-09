@@ -96,16 +96,15 @@ namespace XzBotCs
             Console.WriteLine(string.IsNullOrEmpty(_proxyBaseUrl)
                 ? "Watermark proxy URL is not configured. Set PROXY_BASE_URL, for example: https://example.com/img?u="
                 : $"Watermark proxy URL: {_proxyBaseUrl}");
-            Console.WriteLine("Press any key to exit");
+            Console.WriteLine("Bot is running. Press Ctrl+C to exit.");
             
-            // Keep app running
-            while (!cts.IsCancellationRequested)
+            // Keep app running until cancelled
+            try
             {
-                if (Console.KeyAvailable) break;
-                await Task.Delay(100);
+                await Task.Delay(Timeout.Infinite, cts.Token);
             }
+            catch (OperationCanceledException) { }
 
-            cts.Cancel();
             _state.Save();
         }
 
@@ -239,7 +238,7 @@ namespace XzBotCs
                 {
                     if (_adminId == null || callbackQuery.From.Id != _adminId)
                     {
-                        await botClient.AnswerCallbackQuery(callbackQuery.Id, "⛔ Нет доступа", showAlert: true, cancellationToken: cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "⛔ Нет доступа", showAlert: true, cancellationToken: cancellationToken);
                         return;
                     }
 
@@ -247,18 +246,18 @@ namespace XzBotCs
                     {
                         _state.IsWatermarkEnabled = !_state.IsWatermarkEnabled;
                         _state.Save();
-                        await botClient.AnswerCallbackQuery(callbackQuery.Id, $"Ватермарка: {(_state.IsWatermarkEnabled ? "ВКЛ" : "ВЫКЛ")}", cancellationToken: cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, $"Ватермарка: {(_state.IsWatermarkEnabled ? "ВКЛ" : "ВЫКЛ")}", cancellationToken: cancellationToken);
                         await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
                     }
                     else if (callbackQuery.Data == "stats:refresh")
                     {
                         await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                        await botClient.AnswerCallbackQuery(callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
                     }
                     else if (callbackQuery.Data == "stats:back")
                     {
                         await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                        await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
                     }
                     else if (callbackQuery.Data == "stats:metrics")
                     {
@@ -273,7 +272,7 @@ namespace XzBotCs
                         }
                         catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
                         
-                        await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
                     }
                     else if (callbackQuery.Data == "stats:dashboard")
                     {
@@ -288,7 +287,7 @@ namespace XzBotCs
                         }
                         catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
 
-                        await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
                     }
                 }
                 else if (update.InlineQuery is { } inlineQuery)
@@ -575,10 +574,45 @@ namespace XzBotCs
                     cancellationToken: cancellationToken);
                 return true;
             }
-            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("query is too old", StringComparison.OrdinalIgnoreCase))
+            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && (
+                ex.Message.Contains("query is too old", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("query expired", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("query ID is invalid", StringComparison.OrdinalIgnoreCase)))
             {
                 _statsService.RecordError("inline_timeout");
                 Console.WriteLine($"Inline answer skipped: Telegram query expired ({ex.Message})");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error answering inline query: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static async Task<bool> TryAnswerCallbackQueryAsync(
+            ITelegramBotClient botClient,
+            string callbackQueryId,
+            string? text = null,
+            bool showAlert = false,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await botClient.AnswerCallbackQuery(callbackQueryId, text, showAlert, cancellationToken: cancellationToken);
+                return true;
+            }
+            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && (
+                ex.Message.Contains("query is too old", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("query expired", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("query ID is invalid", StringComparison.OrdinalIgnoreCase)))
+            {
+                Console.WriteLine($"Callback answer skipped: Telegram query expired ({ex.Message})");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error answering callback query: {ex.Message}");
                 return false;
             }
         }
