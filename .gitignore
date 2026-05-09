@@ -28,6 +28,16 @@ env/
 *.log
 logs/
 
+# .NET
+bin/
+obj/
+**/bin/
+**/obj/
+*.user
+*.suo
+bot_state.json
+**/bot_state.json
+
 # IDEs
 .vscode/
 .idea/
