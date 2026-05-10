@@ -18,115 +18,149 @@ namespace XzBotCs.Services
 
         public byte[] GenerateChartImage()
         {
-            var dailyDict = _state.DailyUsage ?? new Dictionary<string, int>();
-
-            // Если DailyUsage пустой, соберём данные из RecentRequests как запасной вариант.
-            if (dailyDict.Count == 0 && _state.RecentRequests != null && _state.RecentRequests.Count > 0)
+            try
             {
-                dailyDict = _state.RecentRequests
-                    .GroupBy(r => r.Time.ToString("dd.MM"))
-                    .ToDictionary(g => g.Key, g => g.Count());
+                var dailyDict = _state.DailyUsage ?? new Dictionary<string, int>();
+
+                // Если DailyUsage пустой, соберём данные из RecentRequests как запасной вариант.
+                if (dailyDict.Count == 0 && _state.RecentRequests != null && _state.RecentRequests.Count > 0)
+                {
+                    dailyDict = _state.RecentRequests
+                        .GroupBy(r => r.Time.ToString("dd.MM"))
+                        .ToDictionary(g => g.Key, g => g.Count());
+                }
+
+                // Безопасно парсим ключи дат. Пропускаем некорректные ключи.
+                var pointsList = new List<KeyValuePair<DateTime, int>>();
+                foreach (var kv in dailyDict)
+                {
+                    if (DateTime.TryParseExact(kv.Key, "dd.MM", null, System.Globalization.DateTimeStyles.None, out var dt))
+                    {
+                        pointsList.Add(new KeyValuePair<DateTime, int>(dt, kv.Value));
+                    }
+                    else
+                    {
+                        // Попытка более гибкого парсинга
+                        if (DateTime.TryParse(kv.Key, out var dt2))
+                        {
+                            pointsList.Add(new KeyValuePair<DateTime, int>(dt2, kv.Value));
+                        }
+                        else
+                        {
+                            Console.WriteLine($"BotStats: пропущен ключ DailyUsage с некорректным форматом даты: '{kv.Key}'");
+                        }
+                    }
+                }
+
+                var sortedStats = pointsList.OrderBy(x => x.Key).Select(x => new KeyValuePair<string, int>(x.Key.ToString("dd.MM"), x.Value)).ToList();
+                if (sortedStats.Count == 0)
+                {
+                    // Возвращаем заглушку с надписью "Нет данных"
+                    return CreatePlaceholderImage("Нет данных");
+                }
+
+                int width = 700;
+                int height = 260;
+                using var bitmap = new SKBitmap(width, height);
+                using var canvas = new SKCanvas(bitmap);
+
+                // Цвета и отступы
+                var bgColor = new SKColor(11, 18, 32);
+                var gridColor = new SKColor(60, 75, 90, 160);
+                var axisColor = new SKColor(80, 100, 120);
+                var lineColor = new SKColor(33, 150, 243);
+                var fillStart = new SKColor(33, 150, 243, 120);
+
+                canvas.Clear(bgColor);
+
+                int left = 60, right = 20, top = 20, bottom = 50;
+                int plotWidth = width - left - right;
+                int plotHeight = height - top - bottom;
+
+                int maxVal = sortedStats.Max(x => x.Value);
+                if (maxVal == 0) maxVal = 1;
+
+                // Горизонтальные сетки и подписи Y
+                int yTicks = 4;
+                using var gridPaint = new SKPaint { Color = gridColor, StrokeWidth = 1, IsAntialias = true };
+                using var labelPaint = new SKPaint { Color = SKColors.LightGray, IsAntialias = true };
+                using var labelFont = new SKFont(SKTypeface.Default, 12);
+                for (int i = 0; i <= yTicks; i++)
+                {
+                    float yy = top + (plotHeight * i / (float)yTicks);
+                    canvas.DrawLine(left, yy, left + plotWidth, yy, gridPaint);
+                    int value = (int)Math.Round(maxVal * (1 - i / (float)yTicks));
+                    var label = value.ToString();
+                    canvas.DrawText(label, 8, yy + 5, labelFont, labelPaint);
+                }
+
+                // Точки данных
+                float xStep = plotWidth / (float)(sortedStats.Count > 1 ? sortedStats.Count - 1 : 1);
+                var points = new List<SKPoint>();
+                for (int i = 0; i < sortedStats.Count; i++)
+                {
+                    float x = left + i * xStep;
+                    float y = top + (plotHeight - (sortedStats[i].Value / (float)maxVal * plotHeight));
+                    points.Add(new SKPoint(x, y));
+                }
+
+                // Заливка под линией
+                using var fillPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
+                fillPaint.Shader = SKShader.CreateLinearGradient(new SKPoint(0, top), new SKPoint(0, top + plotHeight), new[] { fillStart, SKColors.Transparent }, null, SKShaderTileMode.Clamp);
+                using var fillPath = new SKPath();
+                fillPath.MoveTo(points[0].X, top + plotHeight);
+                foreach (var p in points) fillPath.LineTo(p);
+                fillPath.LineTo(points.Last().X, top + plotHeight);
+                fillPath.Close();
+                canvas.DrawPath(fillPath, fillPaint);
+
+                // Тень линии
+                using var shadowPaint = new SKPaint { IsAntialias = true, Color = SKColors.Black.WithAlpha(90), StrokeWidth = 8, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round };
+                using var path = new SKPath();
+                path.MoveTo(points[0]);
+                for (int i = 1; i < points.Count; i++) path.LineTo(points[i]);
+                canvas.DrawPath(path, shadowPaint);
+
+                // Основная линия
+                using var linePaint = new SKPaint { IsAntialias = true, Color = lineColor, StrokeWidth = 3, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round };
+                canvas.DrawPath(path, linePaint);
+
+                // Маркеры точек
+                using var dotFill = new SKPaint { IsAntialias = true, Color = SKColors.White, Style = SKPaintStyle.Fill };
+                using var dotStroke = new SKPaint { IsAntialias = true, Color = lineColor, StrokeWidth = 2, Style = SKPaintStyle.Stroke };
+                using var haloPaint = new SKPaint { IsAntialias = true, Color = lineColor.WithAlpha(60), Style = SKPaintStyle.Fill };
+                for (int i = 0; i < points.Count; i++)
+                {
+                    var p = points[i];
+                    float r = (i == points.Count - 1) ? 5f : 3.5f;
+                    // ореол
+                    canvas.DrawCircle(p.X, p.Y, r + 3, haloPaint);
+                    canvas.DrawCircle(p.X, p.Y, r, dotFill);
+                    canvas.DrawCircle(p.X, p.Y, r, dotStroke);
+                }
+
+                // Подписи X (через равные интервалы, чтобы не налезали)
+                using var xLabelPaint = new SKPaint { Color = SKColors.LightGray, IsAntialias = true };
+                using var xLabelFont = new SKFont(SKTypeface.Default, 12);
+                int maxLabels = Math.Min(sortedStats.Count, 7);
+                int step = Math.Max(1, sortedStats.Count / maxLabels);
+                for (int i = 0; i < sortedStats.Count; i += step)
+                {
+                    var p = points[i];
+                    string label = sortedStats[i].Key;
+                    float textWidth = xLabelFont.MeasureText(label);
+                    canvas.DrawText(label, p.X - textWidth / 2, top + plotHeight + 20, xLabelFont, xLabelPaint);
+                }
+
+                using var image = SKImage.FromBitmap(bitmap);
+                using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+                return data.ToArray();
             }
-
-            var sortedStats = dailyDict.OrderBy(x => DateTime.ParseExact(x.Key, "dd.MM", null)).ToList();
-            if (sortedStats.Count == 0) return new byte[0];
-
-            int width = 700;
-            int height = 260;
-            using var bitmap = new SKBitmap(width, height);
-            using var canvas = new SKCanvas(bitmap);
-
-            // Цвета и отступы
-            var bgColor = new SKColor(11, 18, 32);
-            var gridColor = new SKColor(60, 75, 90, 160);
-            var axisColor = new SKColor(80, 100, 120);
-            var lineColor = new SKColor(33, 150, 243);
-            var fillStart = new SKColor(33, 150, 243, 120);
-
-            canvas.Clear(bgColor);
-
-            int left = 60, right = 20, top = 20, bottom = 50;
-            int plotWidth = width - left - right;
-            int plotHeight = height - top - bottom;
-
-            int maxVal = sortedStats.Max(x => x.Value);
-            if (maxVal == 0) maxVal = 1;
-
-            // Горизонтальные сетки и подписи Y
-            int yTicks = 4;
-            using var gridPaint = new SKPaint { Color = gridColor, StrokeWidth = 1, IsAntialias = true };
-            using var labelPaint = new SKPaint { Color = SKColors.LightGray, IsAntialias = true };
-            using var labelFont = new SKFont(SKTypeface.Default, 12);
-            for (int i = 0; i <= yTicks; i++)
+            catch (Exception ex)
             {
-                float yy = top + (plotHeight * i / (float)yTicks);
-                canvas.DrawLine(left, yy, left + plotWidth, yy, gridPaint);
-                int value = (int)Math.Round(maxVal * (1 - i / (float)yTicks));
-                var label = value.ToString();
-                canvas.DrawText(label, 8, yy + 5, labelFont, labelPaint);
+                Console.WriteLine($"BotStats: ошибка при генерации графика: {ex}");
+                return CreatePlaceholderImage("Ошибка");
             }
-
-            // Точки данных
-            float xStep = plotWidth / (float)(sortedStats.Count > 1 ? sortedStats.Count - 1 : 1);
-            var points = new List<SKPoint>();
-            for (int i = 0; i < sortedStats.Count; i++)
-            {
-                float x = left + i * xStep;
-                float y = top + (plotHeight - (sortedStats[i].Value / (float)maxVal * plotHeight));
-                points.Add(new SKPoint(x, y));
-            }
-
-            // Заливка под линией
-            using var fillPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
-            fillPaint.Shader = SKShader.CreateLinearGradient(new SKPoint(0, top), new SKPoint(0, top + plotHeight), new[] { fillStart, SKColors.Transparent }, null, SKShaderTileMode.Clamp);
-            using var fillPath = new SKPath();
-            fillPath.MoveTo(points[0].X, top + plotHeight);
-            foreach (var p in points) fillPath.LineTo(p);
-            fillPath.LineTo(points.Last().X, top + plotHeight);
-            fillPath.Close();
-            canvas.DrawPath(fillPath, fillPaint);
-
-            // Тень линии
-            using var shadowPaint = new SKPaint { IsAntialias = true, Color = SKColors.Black.WithAlpha(90), StrokeWidth = 8, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round };
-            using var path = new SKPath();
-            path.MoveTo(points[0]);
-            for (int i = 1; i < points.Count; i++) path.LineTo(points[i]);
-            canvas.DrawPath(path, shadowPaint);
-
-            // Основная линия
-            using var linePaint = new SKPaint { IsAntialias = true, Color = lineColor, StrokeWidth = 3, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round };
-            canvas.DrawPath(path, linePaint);
-
-            // Маркеры точек
-            using var dotFill = new SKPaint { IsAntialias = true, Color = SKColors.White, Style = SKPaintStyle.Fill };
-            using var dotStroke = new SKPaint { IsAntialias = true, Color = lineColor, StrokeWidth = 2, Style = SKPaintStyle.Stroke };
-            using var haloPaint = new SKPaint { IsAntialias = true, Color = lineColor.WithAlpha(60), Style = SKPaintStyle.Fill };
-            for (int i = 0; i < points.Count; i++)
-            {
-                var p = points[i];
-                float r = (i == points.Count - 1) ? 5f : 3.5f;
-                // ореол
-                canvas.DrawCircle(p.X, p.Y, r + 3, haloPaint);
-                canvas.DrawCircle(p.X, p.Y, r, dotFill);
-                canvas.DrawCircle(p.X, p.Y, r, dotStroke);
-            }
-
-            // Подписи X (через равные интервалы, чтобы не налезали)
-            using var xLabelPaint = new SKPaint { Color = SKColors.LightGray, IsAntialias = true };
-            using var xLabelFont = new SKFont(SKTypeface.Default, 12);
-            int maxLabels = Math.Min(sortedStats.Count, 7);
-            int step = Math.Max(1, sortedStats.Count / maxLabels);
-            for (int i = 0; i < sortedStats.Count; i += step)
-            {
-                var p = points[i];
-                string label = sortedStats[i].Key;
-                float textWidth = xLabelFont.MeasureText(label);
-                canvas.DrawText(label, p.X - textWidth / 2, top + plotHeight + 20, xLabelFont, xLabelPaint);
-            }
-
-            using var image = SKImage.FromBitmap(bitmap);
-            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            return data.ToArray();
         }
 // ... остальной код (методы IncrementUsage, RecordResponseTime и т.д.)
 // (Мне нужно вставить весь класс целиком, чтобы не терять методы. Но я могу просто добавить метод.)
@@ -296,6 +330,31 @@ namespace XzBotCs.Services
                 .Replace("#", "\\#").Replace("+", "\\+").Replace("-", "\\-")
                 .Replace("=", "\\=").Replace("|", "\\|").Replace("{", "\\{")
                 .Replace("}", "\\}").Replace(".", "\\.").Replace("!", "\\!");
+        }
+
+        private byte[] CreatePlaceholderImage(string text)
+        {
+            int width = 400;
+            int height = 120;
+            using var bitmap = new SKBitmap(width, height);
+            using var canvas = new SKCanvas(bitmap);
+            var bg = new SKColor(24, 32, 48);
+            canvas.Clear(bg);
+
+            using var paint = new SKPaint
+            {
+                Color = SKColors.LightGray,
+                IsAntialias = true,
+                TextSize = 20,
+                Typeface = SKTypeface.Default
+            };
+
+            var textWidth = paint.MeasureText(text);
+            canvas.DrawText(text, (width - textWidth) / 2, height / 2 + paint.TextSize / 2, paint);
+
+            using var image = SKImage.FromBitmap(bitmap);
+            using var data = image.Encode(SKEncodedImageFormat.Png, 90);
+            return data.ToArray();
         }
     }
 }
