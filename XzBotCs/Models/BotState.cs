@@ -15,6 +15,7 @@ namespace XzBotCs.Models
         public Dictionary<string, int> ErrorDetails { get; set; } = new Dictionary<string, int>();
         public List<RequestRecord> RecentRequests { get; set; } = new List<RequestRecord>();
         public Dictionary<string, string> WatermarkFileIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, int> DailyUsage { get; set; } = new Dictionary<string, int>();
 
         private static string FilePath = "bot_state.json";
 

@@ -409,12 +409,17 @@ namespace XzBotCs
             var (bingOk, bingStatus) = await _searchService.CheckBingAsync();
             var text = _statsService.BuildStatsText(bingOk, bingStatus);
             var markup = BuildStatsMarkup();
-            await _botClient!.SendMessage(chatId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-        }
-
-        static string BuildStatsText()
-        {
-            return _statsService.BuildStatsText(false, "checking");
+            
+            var chartBytes = _statsService.GenerateChartImage();
+            if (chartBytes.Length > 0)
+            {
+                using var ms = new MemoryStream(chartBytes);
+                await _botClient!.SendPhoto(chatId, InputFile.FromStream(ms, "stats.png"), caption: text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+            }
+            else
+            {
+                await _botClient!.SendMessage(chatId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+            }
         }
 
         static async Task RefreshStatsAsync(long chatId, int messageId, CancellationToken ct)
@@ -424,7 +429,17 @@ namespace XzBotCs
             var markup = BuildStatsMarkup();
             try
             {
-                await _botClient!.EditMessageText(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                var chartBytes = _statsService.GenerateChartImage();
+                if (chartBytes.Length > 0)
+                {
+                    using var ms = new MemoryStream(chartBytes);
+                    await _botClient!.EditMessageMedia(chatId, messageId, new InputMediaPhoto(InputFile.FromStream(ms, "stats.png")), cancellationToken: ct);
+                    await _botClient!.EditMessageCaption(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                }
+                else
+                {
+                    await _botClient!.EditMessageText(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                }
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
             catch { }
