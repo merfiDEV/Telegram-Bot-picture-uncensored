@@ -280,7 +280,14 @@ namespace XzBotCs
                         });
                         try
                         {
-                            await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                            if (callbackQuery.Message is Message { Type: MessageType.Photo } photoMsg)
+                            {
+                                await botClient.EditMessageCaption(photoMsg.Chat.Id, photoMsg.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                            }
+                            else
+                            {
+                                await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                            }
                         }
                         catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
                         
@@ -295,7 +302,14 @@ namespace XzBotCs
                         });
                         try
                         {
-                            await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                            if (callbackQuery.Message is Message { Type: MessageType.Photo } photoMsg)
+                            {
+                                await botClient.EditMessageCaption(photoMsg.Chat.Id, photoMsg.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                            }
+                            else
+                            {
+                                await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
+                            }
                         }
                         catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
 
@@ -438,7 +452,14 @@ namespace XzBotCs
                 }
                 else
                 {
-                    await _botClient!.EditMessageText(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                    try
+                    {
+                        await _botClient!.EditMessageText(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                    }
+                    catch (ApiRequestException ex) when (ex.Message.Contains("there is no text in the message to edit"))
+                    {
+                        await _botClient!.EditMessageCaption(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                    }
                 }
             }
             catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
