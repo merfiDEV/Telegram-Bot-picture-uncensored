@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -32,6 +33,9 @@ namespace XzBotCs.Services
     {
         private static readonly HttpClient _httpClient = new HttpClient(new HttpClientHandler { UseCookies = true });
         private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(650);
+        private static readonly TimeSpan SearchCacheTtl = TimeSpan.FromMinutes(18);
+        private static readonly object SearchCacheLock = new object();
+        private static readonly Dictionary<string, CachedSearchResponse> SearchCache = new Dictionary<string, CachedSearchResponse>();
 
         static BingSearchService()
         {
@@ -45,6 +49,12 @@ namespace XzBotCs.Services
 
         public async Task<BingSearchResponse> SearchImagesDetailedAsync(string query, int startIndex = 1, int limit = 30)
         {
+            string cacheKey = BuildSearchCacheKey(query, startIndex, limit);
+            if (TryGetCachedSearchResponse(cacheKey, out var cachedResponse))
+            {
+                return cachedResponse;
+            }
+
             var searchResponse = new BingSearchResponse();
             var results = searchResponse.Items;
             string bingFilters = "";
@@ -134,6 +144,11 @@ namespace XzBotCs.Services
                 Console.WriteLine($"Search error: {ex.Message}");
             }
 
+            if (string.IsNullOrEmpty(searchResponse.ErrorType))
+            {
+                StoreCachedSearchResponse(cacheKey, searchResponse);
+            }
+
             return searchResponse;
         }
 
@@ -162,6 +177,66 @@ namespace XzBotCs.Services
             {
                 return Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(url))).ToLowerInvariant();
             }
+        }
+
+        private static string BuildSearchCacheKey(string query, int startIndex, int limit)
+        {
+            return $"{query.Trim().ToLowerInvariant()}|{startIndex}|{limit}";
+        }
+
+        private static bool TryGetCachedSearchResponse(string cacheKey, out BingSearchResponse response)
+        {
+            lock (SearchCacheLock)
+            {
+                if (SearchCache.TryGetValue(cacheKey, out var cached) && DateTime.UtcNow < cached.ExpiresAtUtc)
+                {
+                    response = CloneSearchResponse(cached.Response);
+                    return true;
+                }
+
+                SearchCache.Remove(cacheKey);
+            }
+
+            response = new BingSearchResponse();
+            return false;
+        }
+
+        private static void StoreCachedSearchResponse(string cacheKey, BingSearchResponse response)
+        {
+            lock (SearchCacheLock)
+            {
+                SearchCache[cacheKey] = new CachedSearchResponse
+                {
+                    ExpiresAtUtc = DateTime.UtcNow.Add(SearchCacheTtl),
+                    Response = CloneSearchResponse(response)
+                };
+            }
+        }
+
+        private static BingSearchResponse CloneSearchResponse(BingSearchResponse response)
+        {
+            return new BingSearchResponse
+            {
+                ConsumedCount = response.ConsumedCount,
+                ResponseTime = response.ResponseTime,
+                ErrorType = response.ErrorType,
+                Items = response.Items
+                    .Select(item => new BingImageResult
+                    {
+                        Url = item.Url,
+                        ThumbnailUrl = item.ThumbnailUrl,
+                        SourceUrl = item.SourceUrl,
+                        Id = item.Id,
+                        IsGif = item.IsGif
+                    })
+                    .ToList()
+            };
+        }
+
+        private class CachedSearchResponse
+        {
+            public DateTime ExpiresAtUtc { get; set; }
+            public BingSearchResponse Response { get; set; } = new BingSearchResponse();
         }
 
         private static async Task<(bool IsValid, bool IsGif)> IsValidImageAsync(string url)
