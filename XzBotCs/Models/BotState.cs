@@ -10,6 +10,7 @@ namespace XzBotCs.Models
         public int UsageCount { get; set; }
         public int ErrorCount { get; set; }
         public bool IsWatermarkEnabled { get; set; } = false;
+        public string WatermarkText { get; set; } = "Грешок by MDEV";
         public DateTime StartedAt { get; set; } = DateTime.Now;
         public List<double> ResponseTimesMs { get; set; } = new List<double>();
         public Dictionary<string, int> ErrorDetails { get; set; } = new Dictionary<string, int>();

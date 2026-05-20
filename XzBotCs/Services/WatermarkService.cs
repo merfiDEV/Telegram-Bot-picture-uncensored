@@ -12,14 +12,12 @@ namespace XzBotCs.Services
 
     public class WatermarkService
     {
-        private const string WatermarkText = "Грешок by MDEV";
-
-        public byte[] ApplyWatermark(byte[] imageBytes)
+        public byte[] ApplyWatermark(byte[] imageBytes, string watermarkText)
         {
-            return ApplyWatermarkOrOriginal(imageBytes, "application/octet-stream").Bytes;
+            return ApplyWatermarkOrOriginal(imageBytes, "application/octet-stream", watermarkText).Bytes;
         }
 
-        public WatermarkResult ApplyWatermarkOrOriginal(byte[] imageBytes, string originalContentType)
+        public WatermarkResult ApplyWatermarkOrOriginal(byte[] imageBytes, string originalContentType, string watermarkText)
         {
             try
             {
@@ -65,12 +63,12 @@ namespace XzBotCs.Services
                 };
 
                 float margin = 20;
-                float textWidth = font.MeasureText(WatermarkText);
+                float textWidth = font.MeasureText(watermarkText);
                 float x = width - textWidth - margin;
                 float y = height - margin;
 
-                canvas.DrawText(WatermarkText, x + 2, y + 2, font, shadowPaint);
-                canvas.DrawText(WatermarkText, x, y, font, paint);
+                canvas.DrawText(watermarkText, x + 2, y + 2, font, shadowPaint);
+                canvas.DrawText(watermarkText, x, y, font, paint);
 
                 using var image = surface.Snapshot();
                 using var data = image.Encode(SKEncodedImageFormat.Jpeg, 85);

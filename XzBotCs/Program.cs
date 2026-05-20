@@ -245,6 +245,42 @@ namespace XzBotCs
                             if (System.IO.File.Exists(zipPath)) System.IO.File.Delete(zipPath);
                         }
                     }
+                    else if (messageText.StartsWith("/setwatermark"))
+                    {
+                        if (_adminId == null || message.From?.Id != _adminId)
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string cmdPrefix = "/setwatermark";
+                        if (messageText.StartsWith("/setwatermark@"))
+                        {
+                            int spaceIndex = messageText.IndexOf(' ');
+                            cmdPrefix = spaceIndex >= 0 ? messageText.Substring(0, spaceIndex) : messageText;
+                        }
+
+                        string newWatermark = messageText.Substring(cmdPrefix.Length).Trim();
+                        if (string.IsNullOrEmpty(newWatermark))
+                        {
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "⚠️ Укажите новый текст водяного знака\\.\nПример: `/setwatermark Новый Текст`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        _state.WatermarkText = newWatermark;
+                        _state.WatermarkFileIds.Clear();
+                        _state.Save();
+
+                        await botClient.SendMessage(
+                            message.Chat.Id,
+                            $"✅ Текст водяного знака изменен на: `{Escape(newWatermark)}`\\.\nКэш старых ватермарок в Telegram очищен\\.",
+                            parseMode: ParseMode.MarkdownV2,
+                            cancellationToken: cancellationToken);
+                    }
                 }
                 else if (update.CallbackQuery is { } callbackQuery)
                 {
@@ -537,7 +573,7 @@ namespace XzBotCs
                 }
 
                 var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-                var result = _watermarkService.ApplyWatermarkOrOriginal(bytes, contentType);
+                var result = _watermarkService.ApplyWatermarkOrOriginal(bytes, contentType, _state.WatermarkText);
                 if (!result.IsWatermarked)
                 {
                     Console.WriteLine($"Watermark cache skipped unsupported image: {item.Url}");
@@ -744,7 +780,7 @@ namespace XzBotCs
                     }
 
                     var bytes = await imageResponse.Content.ReadAsByteArrayAsync(ct);
-                    var result = _watermarkService.ApplyWatermarkOrOriginal(bytes, originalContentType);
+                    var result = _watermarkService.ApplyWatermarkOrOriginal(bytes, originalContentType, _state.WatermarkText);
                     if (!result.IsWatermarked)
                     {
                         await WriteRedirectResponseAsync(stream, url, ct);
