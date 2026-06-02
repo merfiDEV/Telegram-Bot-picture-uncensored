@@ -27,7 +27,7 @@ namespace XzBotCs
         private static WatermarkService _watermarkService = new WatermarkService();
         private static BotStatsService _statsService = new BotStatsService(_state);
         private static HttpClient _httpClient = new HttpClient();
-        private static long? _adminId;
+        private static readonly HashSet<long> _adminIds = new HashSet<long>();
         private static long? _cacheChatId;
         private static string? _proxyBaseUrl;
         private static volatile bool _proxyListenerStarted;
@@ -66,9 +66,15 @@ namespace XzBotCs
                 return;
             }
 
-            if (long.TryParse(adminIdStr, out long aid)) _adminId = aid;
+            if (!string.IsNullOrEmpty(adminIdStr))
+            {
+                foreach (var part in adminIdStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (long.TryParse(part, out long aid)) _adminIds.Add(aid);
+                }
+            }
             if (long.TryParse(cacheChatIdStr, out long cid)) _cacheChatId = cid;
-            else _cacheChatId = _adminId;
+            else _cacheChatId = _adminIds.Count > 0 ? _adminIds.First() : null;
             int proxyPort = int.TryParse(proxyPortStr, out int parsedProxyPort) ? parsedProxyPort : DefaultProxyPort;
             _proxyBaseUrl = NormalizeProxyBaseUrl(proxyBaseUrl ?? DefaultProxyBaseUrl);
             SetupLogging();
@@ -194,7 +200,7 @@ namespace XzBotCs
                     }
                     else if (messageText == "/stats")
                     {
-                        if (_adminId == null || message.From?.Id != _adminId)
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
                         {
                             await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
                             return;
@@ -209,7 +215,7 @@ namespace XzBotCs
                             return;
                         }
 
-                        if (_adminId == null || message.From?.Id != _adminId)
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
                         {
                             await botClient.SendMessage(message.Chat.Id, "Нет доступа :/", cancellationToken: cancellationToken);
                             return;
@@ -247,7 +253,7 @@ namespace XzBotCs
                     }
                     else if (messageText.StartsWith("/setwatermark"))
                     {
-                        if (_adminId == null || message.From?.Id != _adminId)
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
                         {
                             await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
                             return;
@@ -284,7 +290,7 @@ namespace XzBotCs
                 }
                 else if (update.CallbackQuery is { } callbackQuery)
                 {
-                    if (_adminId == null || callbackQuery.From.Id != _adminId)
+                    if (_adminIds.Count == 0 || !_adminIds.Contains(callbackQuery.From.Id))
                     {
                         await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "⛔ Нет доступа", showAlert: true, cancellationToken: cancellationToken);
                         return;
