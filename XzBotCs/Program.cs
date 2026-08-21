@@ -30,6 +30,7 @@ namespace XzBotCs
         private static readonly HashSet<long> _adminIds = new HashSet<long>();
         private static long? _cacheChatId;
         private static string? _proxyBaseUrl;
+        private static string? _botUsername;
         private static volatile bool _proxyListenerStarted;
         private static readonly SemaphoreSlim _watermarkUploadLock = new SemaphoreSlim(3);
 
@@ -98,6 +99,7 @@ namespace XzBotCs
             _ = Task.Run(() => StartProxyAsync(proxyPort, cts.Token));
 
             var me = await _botClient.GetMe(cts.Token);
+            _botUsername = me.Username;
             Console.WriteLine($"Start listening for @{me.Username}");
             Console.WriteLine(string.IsNullOrEmpty(_proxyBaseUrl)
                 ? "Watermark proxy URL is not configured. Set PROXY_BASE_URL, for example: https://example.com/img?u="
@@ -181,6 +183,20 @@ namespace XzBotCs
 
                     if (messageText.StartsWith("/start"))
                     {
+                        if (messageText.Contains("register") && message.Chat.Type == ChatType.Private)
+                        {
+                            _state.Subscribers.Add(message.From!.Id);
+                            _state.Save();
+                            var registerMarkup = new InlineKeyboardMarkup(InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("🔍 Начать использовать", ""));
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "✅ *Регистрация подтверждена\\!*\n\nТеперь вы можете пользоваться ботом в inline\\-режиме в любом чате\\.",
+                                parseMode: ParseMode.MarkdownV2,
+                                replyMarkup: registerMarkup,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
                         if (messageText.Contains("developer"))
                         {
                             var devBtn = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("💻 Открыть профиль", DeveloperProfileUrl));
@@ -400,6 +416,12 @@ namespace XzBotCs
                         return;
                     }
 
+                    if (!_state.Subscribers.Contains(inlineQuery.From.Id) && !_adminIds.Contains(inlineQuery.From.Id))
+                    {
+                        await AnswerRegistrationRequired(botClient, inlineQuery.Id, cancellationToken);
+                        return;
+                    }
+
                     if (query.StartsWith("/logs", StringComparison.OrdinalIgnoreCase))
                     {
                         if (!_adminIds.Contains(inlineQuery.From.Id))
@@ -437,11 +459,6 @@ namespace XzBotCs
                             isPersonal: true,
                             cancellationToken: cancellationToken);
                         return;
-                    }
-
-                    if (_state.Subscribers.Add(inlineQuery.From.Id))
-                    {
-                        _state.Save();
                     }
 
                     int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
@@ -759,6 +776,32 @@ namespace XzBotCs
             {
                 StartParameter = "developer"
             };
+        }
+
+        private static async Task AnswerRegistrationRequired(ITelegramBotClient botClient, string inlineQueryId, CancellationToken cancellationToken)
+        {
+            string? botUrl = string.IsNullOrEmpty(_botUsername)
+                ? null
+                : $"https://t.me/{_botUsername}?start=register";
+
+            var result = new InlineQueryResultArticle(
+                "register-required",
+                "🔒 Подтвердите регистрацию",
+                new InputTextMessageContent("Для использования бота откройте личные сообщения и подтвердите регистрацию."))
+            {
+                Description = "Нажмите, чтобы перейти в ЛС с ботом",
+                ReplyMarkup = botUrl == null
+                    ? null
+                    : new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("✅ Перейти в ЛС", botUrl))
+            };
+
+            await TryAnswerInlineQueryAsync(
+                botClient,
+                inlineQueryId,
+                new[] { result },
+                cacheTime: 0,
+                isPersonal: true,
+                cancellationToken: cancellationToken);
         }
 
         private static async Task AnswerEmptyInlineQuery(ITelegramBotClient botClient, string inlineQueryId, CancellationToken cancellationToken)
