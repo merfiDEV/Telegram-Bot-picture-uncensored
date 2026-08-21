@@ -49,7 +49,9 @@ namespace XzBotCs.Services
 
         public async Task<BingSearchResponse> SearchImagesDetailedAsync(string query, int startIndex = 1, int limit = 30)
         {
-            string cacheKey = BuildSearchCacheKey(query, startIndex, limit);
+            bool isGifSearch = TryParseGifFlag(ref query);
+
+            string cacheKey = BuildSearchCacheKey(query, startIndex, limit, isGifSearch);
             if (TryGetCachedSearchResponse(cacheKey, out var cachedResponse))
             {
                 return cachedResponse;
@@ -57,71 +59,39 @@ namespace XzBotCs.Services
 
             var searchResponse = new BingSearchResponse();
             var results = searchResponse.Items;
-            string bingFilters = "";
-            bool isGifSearch = false;
-
-            if (query.Contains("--gif"))
-            {
-                isGifSearch = true;
-                query = query.Replace("--gif", "").Trim();
-                bingFilters = "+filterui:photo-animatedgif";
-            }
-
-            string encodedQuery = HttpUtility.UrlEncode(query);
-            string fetchUrl = $"https://www.bing.com/images/search?q={encodedQuery}&adlt=off&safeSearch=Off&setmkt=en-US&setlang=en-US&first={startIndex}";
-            if (!string.IsNullOrEmpty(bingFilters))
-            {
-                fetchUrl += $"&qft={bingFilters}";
-            }
+            var stopwatch = Stopwatch.StartNew();
 
             try
             {
-                var request = new HttpRequestMessage(HttpMethod.Get, fetchUrl);
-                request.Headers.Add("Cookie", "SRCHHPGUSR=ADLT=OFF&NRSLT=50");
-                request.Headers.Add("Accept-Language", "en-US,en;q=0.9");
-                var stopwatch = Stopwatch.StartNew();
-                var response = await _httpClient.SendAsync(request);
+                if (isGifSearch)
+                {
+                    var filtered = await FetchPageAsync(query, startIndex, limit, "%2Bfilterui%3Aphoto-animatedgif");
+                    results.AddRange(filtered);
+
+                    if (results.Count == 0)
+                    {
+                        Console.WriteLine($"GIF search returned 0 with filter, trying fallback for '{query}'");
+                        var plain = await FetchPageAsync(query, startIndex, limit, null);
+                        foreach (var item in plain)
+                        {
+                            if (item.Url.ToLowerInvariant().Split('?')[0].EndsWith(".gif"))
+                            {
+                                item.IsGif = true;
+                                results.Add(item);
+                                if (results.Count >= limit) break;
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    var fetched = await FetchPageAsync(query, startIndex, limit, null);
+                    results.AddRange(fetched);
+                }
+
                 stopwatch.Stop();
                 searchResponse.ResponseTime = stopwatch.Elapsed;
-                response.EnsureSuccessStatusCode();
-
-                string html = await response.Content.ReadAsStringAsync();
-                var blocks = Regex.Matches(html, @"m=""({.*?})""");
-                searchResponse.ConsumedCount = blocks.Count;
-                var seenHashes = new HashSet<string>();
-
-                foreach (Match blockMatch in blocks)
-                {
-                    string block = blockMatch.Groups[1].Value;
-                    
-                    var murlMatch = Regex.Match(block, @"murl&quot;:&quot;(.*?)&quot;");
-                    var turlMatch = Regex.Match(block, @"turl&quot;:&quot;(.*?)&quot;");
-                    var purlMatch = Regex.Match(block, @"purl&quot;:&quot;(.*?)&quot;");
-
-                    if (!murlMatch.Success) continue;
-
-                    string murl = HttpUtility.HtmlDecode(murlMatch.Groups[1].Value).Replace("\\/", "/");
-                    string turl = turlMatch.Success ? HttpUtility.HtmlDecode(turlMatch.Groups[1].Value).Replace("\\/", "/") : murl;
-                    string purl = purlMatch.Success ? HttpUtility.HtmlDecode(purlMatch.Groups[1].Value).Replace("\\/", "/") : string.Empty;
-
-                    if (!murl.StartsWith("http")) continue;
-                    if (murl.Contains("<") || murl.Contains(">") || murl.Contains("\"") || murl.Contains(" ")) continue;
-
-                    bool isGif = isGifSearch || murl.ToLowerInvariant().Split('?')[0].EndsWith(".gif");
-                    string imageHash = GetImageHash(murl);
-                    if (!seenHashes.Add(imageHash)) continue;
-
-                    results.Add(new BingImageResult
-                    {
-                        Url = murl,
-                        ThumbnailUrl = turl,
-                        SourceUrl = purl,
-                        Id = imageHash,
-                        IsGif = isGif
-                    });
-
-                    if (results.Count >= limit) break;
-                }
+                searchResponse.ConsumedCount = results.Count;
             }
             catch (TaskCanceledException ex)
             {
@@ -152,6 +122,73 @@ namespace XzBotCs.Services
             return searchResponse;
         }
 
+        private async Task<List<BingImageResult>> FetchPageAsync(string query, int startIndex, int limit, string? qftFilter)
+        {
+            var results = new List<BingImageResult>();
+
+            string encodedQuery = HttpUtility.UrlEncode(query);
+            string fetchUrl = $"https://www.bing.com/images/search?q={encodedQuery}&adlt=off&safeSearch=Off&setmkt=en-US&setlang=en-US&first={startIndex}&count={limit}";
+            if (!string.IsNullOrEmpty(qftFilter))
+            {
+                fetchUrl += $"&qft={qftFilter}";
+            }
+
+            var request = new HttpRequestMessage(HttpMethod.Get, fetchUrl);
+            request.Headers.Add("Cookie", "SRCHHPGUSR=ADLT=OFF&NRSLT=50");
+            request.Headers.Add("Accept-Language", "en-US,en;q=0.9");
+            using var response = await _httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            string html = await response.Content.ReadAsStringAsync();
+            var blocks = Regex.Matches(html, @"m=""({.*?})""");
+            var seenHashes = new HashSet<string>();
+            bool gifByFilter = !string.IsNullOrEmpty(qftFilter);
+
+            foreach (Match blockMatch in blocks)
+            {
+                string block = blockMatch.Groups[1].Value;
+
+                var murlMatch = Regex.Match(block, @"murl&quot;:&quot;(.*?)&quot;");
+                var turlMatch = Regex.Match(block, @"turl&quot;:&quot;(.*?)&quot;");
+                var purlMatch = Regex.Match(block, @"purl&quot;:&quot;(.*?)&quot;");
+
+                if (!murlMatch.Success) continue;
+
+                string murl = HttpUtility.HtmlDecode(murlMatch.Groups[1].Value).Replace("\\/", "/");
+                string turl = turlMatch.Success ? HttpUtility.HtmlDecode(turlMatch.Groups[1].Value).Replace("\\/", "/") : murl;
+                string purl = purlMatch.Success ? HttpUtility.HtmlDecode(purlMatch.Groups[1].Value).Replace("\\/", "/") : string.Empty;
+
+                if (!murl.StartsWith("http")) continue;
+                if (murl.Contains("<") || murl.Contains(">") || murl.Contains("\"") || murl.Contains(" ")) continue;
+
+                bool isGif = gifByFilter || murl.ToLowerInvariant().Split('?')[0].EndsWith(".gif");
+                string imageHash = GetImageHash(murl);
+                if (!seenHashes.Add(imageHash)) continue;
+
+                results.Add(new BingImageResult
+                {
+                    Url = murl,
+                    ThumbnailUrl = turl,
+                    SourceUrl = purl,
+                    Id = imageHash,
+                    IsGif = isGif
+                });
+
+                if (results.Count >= limit) break;
+            }
+
+            return results;
+        }
+
+        private static bool TryParseGifFlag(ref string query)
+        {
+            var match = Regex.Match(query, @"(^|\s)--gif(\s|$)", RegexOptions.IgnoreCase);
+            if (!match.Success) return false;
+
+            query = Regex.Replace(query, @"(^|\s)--gif(\s|$)", " ", RegexOptions.IgnoreCase).Trim();
+            return true;
+        }
+
         public async Task<(bool Ok, string Status)> CheckBingAsync()
         {
             try
@@ -179,9 +216,9 @@ namespace XzBotCs.Services
             }
         }
 
-        private static string BuildSearchCacheKey(string query, int startIndex, int limit)
+        private static string BuildSearchCacheKey(string query, int startIndex, int limit, bool isGif)
         {
-            return $"{query.Trim().ToLowerInvariant()}|{startIndex}|{limit}";
+            return $"{query.Trim().ToLowerInvariant()}|{(isGif ? "gif" : "img")}|{startIndex}|{limit}";
         }
 
         private static bool TryGetCachedSearchResponse(string cacheKey, out BingSearchResponse response)
@@ -237,82 +274,6 @@ namespace XzBotCs.Services
         {
             public DateTime ExpiresAtUtc { get; set; }
             public BingSearchResponse Response { get; set; } = new BingSearchResponse();
-        }
-
-        private static async Task<(bool IsValid, bool IsGif)> IsValidImageAsync(string url)
-        {
-            var head = await RequestImageMetadataAsync(HttpMethod.Head, url);
-            if (head.Response != null)
-            {
-                using (head.Response)
-                {
-                    if (head.Response.IsSuccessStatusCode)
-                    {
-                        var contentType = head.Response.Content.Headers.ContentType?.MediaType;
-                        if (!string.IsNullOrWhiteSpace(contentType))
-                        {
-                            return ParseImageResponse(url, contentType);
-                        }
-                    }
-                    else if ((int)head.Response.StatusCode != 403 && (int)head.Response.StatusCode != 405)
-                    {
-                        return (false, false);
-                    }
-                }
-            }
-
-            foreach (var headers in new[] { "bytes=0-0" })
-            {
-                var get = await RequestImageMetadataAsync(HttpMethod.Get, url, headers);
-                if (get.Response == null) continue;
-
-                using (get.Response)
-                {
-                    if (!get.Response.IsSuccessStatusCode) continue;
-
-                    var contentType = get.Response.Content.Headers.ContentType?.MediaType;
-                    if (!string.IsNullOrWhiteSpace(contentType))
-                    {
-                        return ParseImageResponse(url, contentType);
-                    }
-                }
-            }
-
-            return (false, false);
-        }
-
-        private static async Task<(HttpResponseMessage? Response, Exception? Error)> RequestImageMetadataAsync(HttpMethod method, string url, string? range = null)
-        {
-            try
-            {
-                using var cts = new CancellationTokenSource(ImageMetadataTimeout);
-                using var request = new HttpRequestMessage(method, url);
-                if (range != null)
-                {
-                    request.Headers.TryAddWithoutValidation("Range", range);
-                }
-
-                var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-                return (response, null);
-            }
-            catch (Exception ex)
-            {
-                return (null, ex);
-            }
-        }
-
-        private static (bool IsValid, bool IsGif) ParseImageResponse(string url, string contentType)
-        {
-            contentType = contentType.ToLowerInvariant().Trim();
-            bool isValid = contentType.StartsWith("image/");
-            bool isGif = contentType == "image/gif";
-
-            if (!isGif && url.ToLowerInvariant().Split('?')[0].EndsWith(".gif"))
-            {
-                isGif = true;
-            }
-
-            return (isValid, isGif);
         }
     }
 }

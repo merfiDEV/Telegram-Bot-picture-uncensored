@@ -723,7 +723,7 @@ namespace XzBotCs
                         }
                     }
 
-                    string nextOffset = searchResponse.ConsumedCount > 0 ? (offset + searchResponse.ConsumedCount).ToString() : "";
+                    string nextOffset = searchResults.Count > 0 ? (offset + searchResults.Count).ToString() : "";
                     bool answered = await TryAnswerInlineQueryAsync(
                         botClient,
                         inlineQuery.Id,
