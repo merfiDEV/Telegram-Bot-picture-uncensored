@@ -91,7 +91,7 @@ var dashboardText = _statsService.BuildDashboardText();
                 return;
             }
 
-            if (query.Equals("/logs", StringComparison.OrdinalIgnoreCase))
+            if (query.Trim().StartsWith("/logs", StringComparison.OrdinalIgnoreCase))
             {
                 await HandleLogsInlineQueryAsync(inlineQuery.Id, inlineQuery.From.Id, ct);
                 return;

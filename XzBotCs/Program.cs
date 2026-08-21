@@ -367,6 +367,45 @@ namespace XzBotCs
                         return;
                     }
 
+                    if (query.StartsWith("/logs", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!_adminIds.Contains(inlineQuery.From.Id))
+                        {
+                            var noAccessResult = new InlineQueryResultArticle(
+                                "no-access",
+                                "⛔ Нет доступа",
+                                new InputTextMessageContent("У вас нет доступа к логам."));
+                            
+                            await TryAnswerInlineQueryAsync(
+                                botClient,
+                                inlineQuery.Id,
+                                new[] { noAccessResult },
+                                cacheTime: 0,
+                                isPersonal: true,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        var dashboardText = _statsService.BuildDashboardText();
+                        
+                        var logsResult = new InlineQueryResultArticle(
+                            "logs-dashboard",
+                            "📋 Логи запросов",
+                            new InputTextMessageContent(dashboardText) { ParseMode = ParseMode.MarkdownV2 })
+                        {
+                            Description = "Последние 10 запросов"
+                        };
+
+                        await TryAnswerInlineQueryAsync(
+                            botClient,
+                            inlineQuery.Id,
+                            new[] { logsResult },
+                            cacheTime: 10,
+                            isPersonal: true,
+                            cancellationToken: cancellationToken);
+                        return;
+                    }
+
                     int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
                     Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}");
                     _statsService.IncrementUsage();
