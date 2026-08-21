@@ -174,6 +174,11 @@ namespace XzBotCs
             {
                 if (update.Message is { } message && message.Text is { } messageText)
                 {
+                    if (message.Chat.Type == ChatType.Private && message.From != null && _state.Subscribers.Add(message.From.Id))
+                    {
+                        _state.Save();
+                    }
+
                     if (messageText.StartsWith("/start"))
                     {
                         if (messageText.Contains("developer"))
@@ -286,6 +291,34 @@ namespace XzBotCs
                             $"✅ Текст водяного знака изменен на: `{Escape(newWatermark)}`\\.\nКэш старых ватермарок в Telegram очищен\\.",
                             parseMode: ParseMode.MarkdownV2,
                             cancellationToken: cancellationToken);
+                    }
+                    else if (messageText.StartsWith("/upt"))
+                    {
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string cmdPrefix = "/upt";
+                        if (messageText.StartsWith("/upt@"))
+                        {
+                            int spaceIndex = messageText.IndexOf(' ');
+                            cmdPrefix = spaceIndex >= 0 ? messageText.Substring(0, spaceIndex) : messageText;
+                        }
+
+                        string announcement = messageText.Substring(cmdPrefix.Length).Trim();
+                        if (string.IsNullOrEmpty(announcement))
+                        {
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "⚠️ Укажите текст рассылки\\.\nПример: `/upt Важное обновление!`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        await SendBroadcastAsync(message.Chat.Id, announcement, cancellationToken);
                     }
                 }
                 else if (update.CallbackQuery is { } callbackQuery)
@@ -406,6 +439,11 @@ namespace XzBotCs
                         return;
                     }
 
+                    if (_state.Subscribers.Add(inlineQuery.From.Id))
+                    {
+                        _state.Save();
+                    }
+
                     int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
                     Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}");
                     _statsService.IncrementUsage();
@@ -497,6 +535,66 @@ namespace XzBotCs
         {
             Console.WriteLine(exception);
             return Task.CompletedTask;
+        }
+
+        static async Task SendBroadcastAsync(long adminChatId, string announcement, CancellationToken ct)
+        {
+            var subscribers = _state.Subscribers.ToList();
+            if (subscribers.Count == 0)
+            {
+                await _botClient!.SendMessage(adminChatId, "📭 Список подписчиков пуст.", cancellationToken: ct);
+                return;
+            }
+
+            await _botClient!.SendMessage(
+                adminChatId,
+                $"🚀 Начинаю рассылку для `{subscribers.Count}` подписчиков\\.\\.\\.",
+                parseMode: ParseMode.MarkdownV2,
+                cancellationToken: ct);
+
+            int success = 0;
+            int failed = 0;
+            var failedIds = new List<long>();
+
+            foreach (var userId in subscribers)
+            {
+                try
+                {
+                    await _botClient!.SendMessage(
+                        userId,
+                        "📢 *Обновление*\n\n" + announcement,
+                        parseMode: ParseMode.Markdown,
+                        cancellationToken: ct);
+                    success++;
+                }
+                catch (ApiRequestException ex) when (ex.ErrorCode == 403)
+                {
+                    failed++;
+                    _state.Subscribers.Remove(userId);
+                    failedIds.Add(userId);
+                    Console.WriteLine($"Broadcast: user {userId} blocked the bot, removed from subscribers.");
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Console.WriteLine($"Broadcast: failed to send to {userId}: {ex.Message}");
+                }
+
+                await Task.Delay(50, ct);
+            }
+
+            if (failedIds.Count > 0)
+            {
+                _state.Save();
+            }
+
+            await _botClient!.SendMessage(
+                adminChatId,
+                $"✅ Рассылка завершена\\.\n\n" +
+                $"📨 Отправлено: `{success}`\n" +
+                $"❌ Не удалось: `{failed}`",
+                parseMode: ParseMode.MarkdownV2,
+                cancellationToken: ct);
         }
 
         static async Task SendStatsAsync(long chatId, CancellationToken ct)
