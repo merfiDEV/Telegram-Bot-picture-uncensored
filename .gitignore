@@ -37,6 +37,8 @@ obj/
 *.suo
 bot_state.json
 **/bot_state.json
+pref.json
+**/pref.json
 
 # IDEs
 .vscode/

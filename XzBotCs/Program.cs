@@ -26,6 +26,7 @@ namespace XzBotCs
         private static BingSearchService _searchService = new BingSearchService();
         private static WatermarkService _watermarkService = new WatermarkService();
         private static BotStatsService _statsService = new BotStatsService(_state);
+        private static PrefStore _prefs = PrefStore.Load();
         private static HttpClient _httpClient = new HttpClient();
         private static readonly HashSet<long> _adminIds = new HashSet<long>();
         private static long? _cacheChatId;
@@ -401,6 +402,104 @@ namespace XzBotCs
                         await botClient.SendMessage(
                             message.Chat.Id,
                             adminText,
+                            parseMode: ParseMode.MarkdownV2,
+                            cancellationToken: cancellationToken);
+                    }
+                    else if (messageText.StartsWith("/setpref"))
+                    {
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string cmdPrefix = "/setpref";
+                        if (messageText.StartsWith("/setpref@"))
+                        {
+                            int spaceIndex = messageText.IndexOf(' ');
+                            cmdPrefix = spaceIndex >= 0 ? messageText.Substring(0, spaceIndex) : messageText;
+                        }
+
+                        string arg = messageText.Substring(cmdPrefix.Length).Trim();
+                        if (string.IsNullOrEmpty(arg))
+                        {
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "⚠️ Укажите ID и префикс\\.\nПример: `/setpref 1741079861 🅰`\nДля очистки: `/setpref 1741079861`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        var parts = arg.Split(new[] { ' ', '\t' }, 2, StringSplitOptions.RemoveEmptyEntries);
+                        long targetId = ExtractUserId(parts[0]);
+                        if (targetId == 0)
+                        {
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "⚠️ Неверный ID\\. Пример: `/setpref 1741079861 🅰`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string prefix = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+
+                        if (string.IsNullOrEmpty(prefix))
+                        {
+                            _prefs.Prefixes.Remove(targetId);
+                        }
+                        else
+                        {
+                            _prefs.Prefixes[targetId] = prefix;
+                        }
+                        _prefs.Save();
+
+                        string prefixText =
+                            "✦ ────────────── ✦\n" +
+                            "🏷 *Префикс обновлён*\n\n" +
+                            $"🆔 ID: `{targetId}`\n" +
+                            (string.IsNullOrEmpty(prefix)
+                                ? "Префикс очищен\\.\n"
+                                : $"Новый префикс: {Escape(prefix)}\n") +
+                            "✦ ────────────── ✦";
+
+                        await botClient.SendMessage(
+                            message.Chat.Id,
+                            prefixText,
+                            parseMode: ParseMode.MarkdownV2,
+                            cancellationToken: cancellationToken);
+                    }
+                    else if (messageText.StartsWith("/admins"))
+                    {
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        var lines = new List<string>
+                        {
+                            "✦ ────────────── ✦",
+                            "👑 *Список администраторов*",
+                            ""
+                        };
+
+                        foreach (var adminId in _adminIds.OrderBy(id => id))
+                        {
+                            string? username = await TryGetUsernameAsync(botClient, adminId, cancellationToken);
+                            string display = string.IsNullOrEmpty(username) ? "без username" : $"@{username}";
+                            _prefs.Prefixes.TryGetValue(adminId, out string? pref);
+                            string prefix = string.IsNullOrEmpty(pref) ? "" : $"{Escape(pref)} ";
+                            lines.Add($"• {prefix}{Escape(display)} — `{adminId}`");
+                        }
+
+                        lines.Add("");
+                        lines.Add("✦ ────────────── ✦");
+
+                        await botClient.SendMessage(
+                            message.Chat.Id,
+                            string.Join("\n", lines),
                             parseMode: ParseMode.MarkdownV2,
                             cancellationToken: cancellationToken);
                     }
@@ -872,6 +971,19 @@ namespace XzBotCs
             {
                 StartParameter = "developer"
             };
+        }
+
+        private static async Task<string?> TryGetUsernameAsync(ITelegramBotClient botClient, long userId, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var chat = await botClient.GetChat(new ChatId(userId), cancellationToken: cancellationToken);
+                return chat.Username;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static long ExtractUserId(string input)
