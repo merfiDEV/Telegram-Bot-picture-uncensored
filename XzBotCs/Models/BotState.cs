@@ -18,6 +18,7 @@ namespace XzBotCs.Models
         public Dictionary<string, string> WatermarkFileIds { get; set; } = new Dictionary<string, string>();
         public Dictionary<string, int> DailyUsage { get; set; } = new Dictionary<string, int>();
         public HashSet<long> Subscribers { get; set; } = new HashSet<long>();
+        public HashSet<long> ExtraAdmins { get; set; } = new HashSet<long>();
 
         private static string FilePath = "bot_state.json";
 

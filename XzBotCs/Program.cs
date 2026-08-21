@@ -74,6 +74,10 @@ namespace XzBotCs
                     if (long.TryParse(part, out long aid)) _adminIds.Add(aid);
                 }
             }
+            foreach (var extraAdmin in _state.ExtraAdmins)
+            {
+                _adminIds.Add(extraAdmin);
+            }
             if (long.TryParse(cacheChatIdStr, out long cid)) _cacheChatId = cid;
             else _cacheChatId = _adminIds.Count > 0 ? _adminIds.First() : null;
             int proxyPort = int.TryParse(proxyPortStr, out int parsedProxyPort) ? parsedProxyPort : DefaultProxyPort;
@@ -305,6 +309,98 @@ namespace XzBotCs
                         await botClient.SendMessage(
                             message.Chat.Id,
                             $"✅ Текст водяного знака изменен на: `{Escape(newWatermark)}`\\.\nКэш старых ватермарок в Telegram очищен\\.",
+                            parseMode: ParseMode.MarkdownV2,
+                            cancellationToken: cancellationToken);
+                    }
+                    else if (messageText.StartsWith("/makeadmin"))
+                    {
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string cmdPrefix = "/makeadmin";
+                        if (messageText.StartsWith("/makeadmin@"))
+                        {
+                            int spaceIndex = messageText.IndexOf(' ');
+                            cmdPrefix = spaceIndex >= 0 ? messageText.Substring(0, spaceIndex) : messageText;
+                        }
+
+                        string arg = messageText.Substring(cmdPrefix.Length).Trim();
+                        long newAdminId = ExtractUserId(arg);
+                        if (newAdminId == 0)
+                        {
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "⚠️ Укажите корректный ID пользователя\\.\nПримеры:\n`/makeadmin 1741079861`\n`/makeadmin tg://user?id=1741079861`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        bool added = _adminIds.Add(newAdminId);
+                        _state.ExtraAdmins.Add(newAdminId);
+                        _state.Save();
+
+                        string adminText =
+                            "✦ ────────────── ✦\n" +
+                            "👑 *Администратор выдан*\n\n" +
+                            $"🆔 ID: `{newAdminId}`\n\n" +
+                            (added
+                                ? "✅ Пользователь получил полный доступ к админ\\-командам\\.\n"
+                                : "ℹ️ Пользователь уже был администратором\\.\n") +
+                            "✦ ────────────── ✦";
+
+                        await botClient.SendMessage(
+                            message.Chat.Id,
+                            adminText,
+                            parseMode: ParseMode.MarkdownV2,
+                            cancellationToken: cancellationToken);
+                    }
+                    else if (messageText.StartsWith("/unmakeadmin"))
+                    {
+                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
+                        {
+                            await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        string cmdPrefix = "/unmakeadmin";
+                        if (messageText.StartsWith("/unmakeadmin@"))
+                        {
+                            int spaceIndex = messageText.IndexOf(' ');
+                            cmdPrefix = spaceIndex >= 0 ? messageText.Substring(0, spaceIndex) : messageText;
+                        }
+
+                        string arg = messageText.Substring(cmdPrefix.Length).Trim();
+                        long removeAdminId = ExtractUserId(arg);
+                        if (removeAdminId == 0)
+                        {
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "⚠️ Укажите корректный ID пользователя\\.\nПримеры:\n`/unmakeadmin 1741079861`\n`/unmakeadmin tg://user?id=1741079861`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        bool removed = _adminIds.Remove(removeAdminId);
+                        _state.ExtraAdmins.Remove(removeAdminId);
+                        _state.Save();
+
+                        string adminText =
+                            "✦ ────────────── ✦\n" +
+                            "🚫 *Администратор снят*\n\n" +
+                            $"🆔 ID: `{removeAdminId}`\n\n" +
+                            (removed
+                                ? "❌ Пользователь лишён админ\\-доступа\\.\n"
+                                : "ℹ️ Пользователь и так не был администратором\\.\n") +
+                            "✦ ────────────── ✦";
+
+                        await botClient.SendMessage(
+                            message.Chat.Id,
+                            adminText,
                             parseMode: ParseMode.MarkdownV2,
                             cancellationToken: cancellationToken);
                     }
@@ -776,6 +872,27 @@ namespace XzBotCs
             {
                 StartParameter = "developer"
             };
+        }
+
+        private static long ExtractUserId(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return 0;
+
+            input = input.Trim();
+
+            if (long.TryParse(input, out long directId)) return directId;
+
+            const string marker = "user?id=";
+            int index = input.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (index >= 0)
+            {
+                string idStr = input.Substring(index + marker.Length);
+                int end = idStr.IndexOfAny(new[] { '&', '?', ' ', '\t' });
+                if (end >= 0) idStr = idStr.Substring(0, end);
+                if (long.TryParse(idStr, out long tgId)) return tgId;
+            }
+
+            return 0;
         }
 
         private static async Task AnswerRegistrationRequired(ITelegramBotClient botClient, string inlineQueryId, CancellationToken cancellationToken)
