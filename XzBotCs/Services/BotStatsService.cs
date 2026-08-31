@@ -168,8 +168,11 @@ namespace XzBotCs.Services
 
         public void IncrementUsage()
         {
-            _state.UsageCount++;
-            IncrementDailyUsage();
+            lock (_state.SyncRoot)
+            {
+                _state.UsageCount++;
+                IncrementDailyUsage();
+            }
         }
 
         private void IncrementDailyUsage()
@@ -187,33 +190,42 @@ namespace XzBotCs.Services
 
         public void RecordResponseTime(TimeSpan elapsed)
         {
-            _state.ResponseTimesMs.Add(Math.Round(elapsed.TotalMilliseconds, 1));
-            if (_state.ResponseTimesMs.Count > 1000)
+            lock (_state.SyncRoot)
             {
-                _state.ResponseTimesMs.RemoveRange(0, _state.ResponseTimesMs.Count - 1000);
+                _state.ResponseTimesMs.Add(Math.Round(elapsed.TotalMilliseconds, 1));
+                if (_state.ResponseTimesMs.Count > 1000)
+                {
+                    _state.ResponseTimesMs.RemoveRange(0, _state.ResponseTimesMs.Count - 1000);
+                }
             }
         }
 
         public void RecordError(string errorType)
         {
-            _state.ErrorCount++;
-            _state.ErrorDetails[errorType] = _state.ErrorDetails.TryGetValue(errorType, out int count) ? count + 1 : 1;
+            lock (_state.SyncRoot)
+            {
+                _state.ErrorCount++;
+                _state.ErrorDetails[errorType] = _state.ErrorDetails.TryGetValue(errorType, out int count) ? count + 1 : 1;
+            }
         }
 
         public void RecordRequest(long userId, string? username, string query, bool success)
         {
-            _state.RecentRequests.Insert(0, new RequestRecord
+            lock (_state.SyncRoot)
             {
-                Time = DateTime.Now,
-                UserId = userId,
-                Username = string.IsNullOrWhiteSpace(username) ? "Unknown" : username,
-                Query = query,
-                Success = success
-            });
+                _state.RecentRequests.Insert(0, new RequestRecord
+                {
+                    Time = DateTime.Now,
+                    UserId = userId,
+                    Username = string.IsNullOrWhiteSpace(username) ? "Unknown" : username,
+                    Query = query,
+                    Success = success
+                });
 
-            if (_state.RecentRequests.Count > 20)
-            {
-                _state.RecentRequests.RemoveRange(20, _state.RecentRequests.Count - 20);
+                if (_state.RecentRequests.Count > 20)
+                {
+                    _state.RecentRequests.RemoveRange(20, _state.RecentRequests.Count - 20);
+                }
             }
         }
 

@@ -9,6 +9,9 @@ namespace XzBotCs.Models
     {
         public Dictionary<long, string> Prefixes { get; set; } = new Dictionary<long, string>();
 
+        [JsonIgnore]
+        public object SyncRoot { get; } = new object();
+
         private static string FilePath = "pref.json";
 
         public static PrefStore Load()
@@ -31,12 +34,17 @@ namespace XzBotCs.Models
 
         public void Save()
         {
-            try
+            lock (SyncRoot)
             {
-                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(FilePath, json);
+                try
+                {
+                    string tmp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                    File.WriteAllText(tmp, json);
+                    File.Move(tmp, FilePath, overwrite: true);
+                }
+                catch { }
             }
-            catch { }
         }
     }
 }

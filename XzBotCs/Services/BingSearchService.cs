@@ -33,6 +33,7 @@ namespace XzBotCs.Services
     {
         private static readonly HttpClient _httpClient = new HttpClient(new HttpClientHandler { UseCookies = true });
         private static readonly TimeSpan ImageMetadataTimeout = TimeSpan.FromMilliseconds(650);
+        private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan SearchCacheTtl = TimeSpan.FromMinutes(18);
         private static readonly object SearchCacheLock = new object();
         private static readonly Dictionary<string, CachedSearchResponse> SearchCache = new Dictionary<string, CachedSearchResponse>();
@@ -140,7 +141,7 @@ namespace XzBotCs.Services
             response.EnsureSuccessStatusCode();
 
             string html = await response.Content.ReadAsStringAsync();
-            var blocks = Regex.Matches(html, @"m=""({.*?})""");
+            var blocks = Regex.Matches(html, @"m=""({.*?})""", RegexOptions.None, RegexTimeout);
             var seenHashes = new HashSet<string>();
             bool gifByFilter = !string.IsNullOrEmpty(qftFilter);
 
@@ -148,9 +149,9 @@ namespace XzBotCs.Services
             {
                 string block = blockMatch.Groups[1].Value;
 
-                var murlMatch = Regex.Match(block, @"murl&quot;:&quot;(.*?)&quot;");
-                var turlMatch = Regex.Match(block, @"turl&quot;:&quot;(.*?)&quot;");
-                var purlMatch = Regex.Match(block, @"purl&quot;:&quot;(.*?)&quot;");
+                var murlMatch = Regex.Match(block, @"murl&quot;:&quot;(.*?)&quot;", RegexOptions.None, RegexTimeout);
+                var turlMatch = Regex.Match(block, @"turl&quot;:&quot;(.*?)&quot;", RegexOptions.None, RegexTimeout);
+                var purlMatch = Regex.Match(block, @"purl&quot;:&quot;(.*?)&quot;", RegexOptions.None, RegexTimeout);
 
                 if (!murlMatch.Success) continue;
 
@@ -182,10 +183,10 @@ namespace XzBotCs.Services
 
         private static bool TryParseGifFlag(ref string query)
         {
-            var match = Regex.Match(query, @"(^|\s)--gif(\s|$)", RegexOptions.IgnoreCase);
+            var match = Regex.Match(query, @"(^|\s)--gif(\s|$)", RegexOptions.IgnoreCase, RegexTimeout);
             if (!match.Success) return false;
 
-            query = Regex.Replace(query, @"(^|\s)--gif(\s|$)", " ", RegexOptions.IgnoreCase).Trim();
+            query = Regex.Replace(query, @"(^|\s)--gif(\s|$)", " ", RegexOptions.IgnoreCase, RegexTimeout).Trim();
             return true;
         }
 

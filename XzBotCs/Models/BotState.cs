@@ -20,6 +20,9 @@ namespace XzBotCs.Models
         public HashSet<long> Subscribers { get; set; } = new HashSet<long>();
         public HashSet<long> ExtraAdmins { get; set; } = new HashSet<long>();
 
+        [JsonIgnore]
+        public object SyncRoot { get; } = new object();
+
         private static string FilePath = "bot_state.json";
 
         public static BotState Load()
@@ -43,12 +46,19 @@ namespace XzBotCs.Models
 
         public void Save()
         {
-            try
+            lock (SyncRoot)
             {
-                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(FilePath, json);
+                try
+                {
+                    // Атомарная запись: пишем во временный файл, затем переименовываем поверх целевого.
+                    // Так исключается побитый JSON и конфликт с другим пишущим потоком (IOException).
+                    string tmp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                    File.WriteAllText(tmp, json);
+                    File.Move(tmp, FilePath, overwrite: true);
+                }
+                catch { }
             }
-            catch { }
         }
     }
 

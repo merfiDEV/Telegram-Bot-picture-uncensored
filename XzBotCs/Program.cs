@@ -34,7 +34,8 @@ namespace XzBotCs
         private static string? _botUsername;
         private static volatile bool _proxyListenerStarted;
         private static readonly SemaphoreSlim _watermarkUploadLock = new SemaphoreSlim(3);
-        private static readonly Random _random = new Random();
+        private static readonly TimeSpan FlagRegexTimeout = TimeSpan.FromSeconds(1);
+        private static readonly object _stateLock = new object();
 
         private const int DefaultProxyPort = 8080;
         private const string DefaultProxyBaseUrl = "http://46.229.63.243:8080/img?u=";
@@ -129,10 +130,11 @@ namespace XzBotCs
 
         private static bool TryParseFlag(ref string query, string flag)
         {
-            var match = System.Text.RegularExpressions.Regex.Match(query, $@"(^|\s){System.Text.RegularExpressions.Regex.Escape(flag)}(\s|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var pattern = $@"(^|\s){System.Text.RegularExpressions.Regex.Escape(flag)}(\s|$)";
+            var match = System.Text.RegularExpressions.Regex.Match(query, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase, FlagRegexTimeout);
             if (!match.Success) return false;
 
-            query = System.Text.RegularExpressions.Regex.Replace(query, $@"(^|\s){System.Text.RegularExpressions.Regex.Escape(flag)}(\s|$)", " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+            query = System.Text.RegularExpressions.Regex.Replace(query, pattern, " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase, FlagRegexTimeout).Trim();
             return true;
         }
 
@@ -191,16 +193,24 @@ namespace XzBotCs
             {
                 if (update.Message is { } message && message.Text is { } messageText)
                 {
-                    if (message.Chat.Type == ChatType.Private && message.From != null && _state.Subscribers.Add(message.From.Id))
+                    if (message.Chat.Type == ChatType.Private && message.From != null)
                     {
-                        _state.Save();
+                        bool added;
+                        lock (_state.SyncRoot)
+                        {
+                            added = _state.Subscribers.Add(message.From.Id);
+                        }
+                        if (added) _state.Save();
                     }
 
                     if (messageText.StartsWith("/start"))
                     {
                         if (messageText.Contains("register") && message.Chat.Type == ChatType.Private)
                         {
-                            _state.Subscribers.Add(message.From!.Id);
+                            lock (_state.SyncRoot)
+                            {
+                                _state.Subscribers.Add(message.From!.Id);
+                            }
                             _state.Save();
                             var registerMarkup = new InlineKeyboardMarkup(InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("🔍 Начать использовать", ""));
                             await botClient.SendMessage(
@@ -333,8 +343,11 @@ namespace XzBotCs
                             return;
                         }
 
-                        _state.WatermarkText = newWatermark;
-                        _state.WatermarkFileIds.Clear();
+                        lock (_state.SyncRoot)
+                        {
+                            _state.WatermarkText = newWatermark;
+                            _state.WatermarkFileIds.Clear();
+                        }
                         _state.Save();
 
                         await botClient.SendMessage(
@@ -370,8 +383,12 @@ namespace XzBotCs
                             return;
                         }
 
-                        bool added = _adminIds.Add(newAdminId);
-                        _state.ExtraAdmins.Add(newAdminId);
+                        bool added;
+                        lock (_state.SyncRoot)
+                        {
+                            added = _adminIds.Add(newAdminId);
+                            _state.ExtraAdmins.Add(newAdminId);
+                        }
                         _state.Save();
 
                         string adminText =
@@ -416,8 +433,12 @@ namespace XzBotCs
                             return;
                         }
 
-                        bool removed = _adminIds.Remove(removeAdminId);
-                        _state.ExtraAdmins.Remove(removeAdminId);
+                        bool removed;
+                        lock (_state.SyncRoot)
+                        {
+                            removed = _adminIds.Remove(removeAdminId);
+                            _state.ExtraAdmins.Remove(removeAdminId);
+                        }
                         _state.Save();
 
                         string adminText =
@@ -475,13 +496,16 @@ namespace XzBotCs
 
                         string prefix = parts.Length > 1 ? parts[1].Trim() : string.Empty;
 
-                        if (string.IsNullOrEmpty(prefix))
+                        lock (_prefs.SyncRoot)
                         {
-                            _prefs.Prefixes.Remove(targetId);
-                        }
-                        else
-                        {
-                            _prefs.Prefixes[targetId] = prefix;
+                            if (string.IsNullOrEmpty(prefix))
+                            {
+                                _prefs.Prefixes.Remove(targetId);
+                            }
+                            else
+                            {
+                                _prefs.Prefixes[targetId] = prefix;
+                            }
                         }
                         _prefs.Save();
 
@@ -771,7 +795,7 @@ namespace XzBotCs
 
                     if (isRandom && results.Count > 1)
                     {
-                        results = [results[_random.Next(results.Count)]];
+                        results = [results[Random.Shared.Next(results.Count)]];
                     }
 
                     string nextOffset = searchResults.Count > 0 ? (offset + searchResults.Count).ToString() : "";
@@ -820,7 +844,7 @@ namespace XzBotCs
             _statsService.RecordRequest(0, null, topic + " --random", true);
             _state.Save();
 
-            var pick = items[_random.Next(items.Count)];
+            var pick = items[Random.Shared.Next(items.Count)];
             var markup = BuildSourceMarkup(pick);
 
             if (pick.IsGif)
@@ -847,7 +871,11 @@ namespace XzBotCs
 
         static async Task SendBroadcastAsync(long adminChatId, string announcement, CancellationToken ct)
         {
-            var subscribers = _state.Subscribers.ToList();
+            List<long> subscribers;
+            lock (_state.SyncRoot)
+            {
+                subscribers = _state.Subscribers.ToList();
+            }
             if (subscribers.Count == 0)
             {
                 await _botClient!.SendMessage(adminChatId, "📭 Список подписчиков пуст.", cancellationToken: ct);
@@ -878,7 +906,10 @@ namespace XzBotCs
                 catch (ApiRequestException ex) when (ex.ErrorCode == 403)
                 {
                     failed++;
-                    _state.Subscribers.Remove(userId);
+                    lock (_state.SyncRoot)
+                    {
+                        _state.Subscribers.Remove(userId);
+                    }
                     failedIds.Add(userId);
                     Console.WriteLine($"Broadcast: user {userId} blocked the bot, removed from subscribers.");
                 }
@@ -992,17 +1023,23 @@ namespace XzBotCs
                 return null;
             }
 
-            if (_state.WatermarkFileIds.TryGetValue(item.Id, out string? cachedFileId) && !string.IsNullOrEmpty(cachedFileId))
+            lock (_state.SyncRoot)
             {
-                return cachedFileId;
+                if (_state.WatermarkFileIds.TryGetValue(item.Id, out string? cachedFileId) && !string.IsNullOrEmpty(cachedFileId))
+                {
+                    return cachedFileId;
+                }
             }
 
             await _watermarkUploadLock.WaitAsync(cancellationToken);
             try
             {
-                if (_state.WatermarkFileIds.TryGetValue(item.Id, out cachedFileId) && !string.IsNullOrEmpty(cachedFileId))
+                lock (_state.SyncRoot)
                 {
-                    return cachedFileId;
+                    if (_state.WatermarkFileIds.TryGetValue(item.Id, out string? cachedFileId) && !string.IsNullOrEmpty(cachedFileId))
+                    {
+                        return cachedFileId;
+                    }
                 }
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, item.Url);
@@ -1045,7 +1082,10 @@ namespace XzBotCs
                     return null;
                 }
 
-                _state.WatermarkFileIds[item.Id] = fileId;
+                lock (_state.SyncRoot)
+                {
+                    _state.WatermarkFileIds[item.Id] = fileId;
+                }
                 _state.Save();
                 return fileId;
             }
