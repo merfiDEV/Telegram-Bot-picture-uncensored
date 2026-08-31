@@ -4,6 +4,7 @@ using System.Linq;
 using System.IO;
 using SkiaSharp;
 using XzBotCs.Models;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace XzBotCs.Services
 {
@@ -222,10 +223,13 @@ namespace XzBotCs.Services
                     Success = success
                 });
 
-                if (_state.RecentRequests.Count > 20)
+                if (_state.RecentRequests.Count > 200) // Храним больше записей для статистики
                 {
-                    _state.RecentRequests.RemoveRange(20, _state.RecentRequests.Count - 20);
+                    _state.RecentRequests.RemoveRange(200, _state.RecentRequests.Count - 200);
                 }
+
+                // Обновляем агрегированную статистику
+                UpdateStatsFromRecent();
             }
         }
 
@@ -298,29 +302,164 @@ namespace XzBotCs.Services
             return string.Join("\n", lines);
         }
 
-        public string BuildDashboardText()
+        public string BuildDashboardText(long userId, int? page = null, string? filter = null, string? search = null)
         {
+            // Получаем состояние пользователя или создаем новое
+            if (!_state.DashboardStates.ContainsKey(userId))
+            {
+                _state.DashboardStates[userId] = new DashboardState();
+            }
+            var state = _state.DashboardStates[userId];
+
+            // Если переданы параметры, обновляем состояние
+            if (page.HasValue) state.Page = page.Value;
+            if (filter != null) state.Filter = filter;
+            if (search != null) state.Search = search;
+
             var lines = new List<string>
             {
                 "📋 *Дашборд последних запросов*",
                 ""
             };
 
-            if (_state.RecentRequests.Count == 0)
+            // Статистика сверху
+            var today = DateTime.Today;
+            var todayRequests = _state.RecentRequests.Where(r => r.Time.Date == today).ToList();
+            int todayTotal = todayRequests.Count;
+            int todaySuccess = todayRequests.Count(r => r.Success);
+            int todayErrors = todayRequests.Count(r => !r.Success);
+
+            // Топ-5 запросов за сегодня
+            var topQueries = todayRequests
+                .GroupBy(r => r.Query)
+                .Select(g => new { Query = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .Take(5)
+                .ToList();
+
+            lines.Add($"📊 *За сегодня:* `{todayTotal}` запросов ✅ `{todaySuccess}` ❌ `{todayErrors}`");
+            if (topQueries.Count > 0)
             {
-                lines.Add("  _Пусто_");
+                string topStr = string.Join(", ", topQueries.Select(x => $"\"{Escape(x.Query.Trim())}\" \\({x.Count}\\)"));
+                lines.Add($"🔥 *Топ:* {topStr}");
+            }
+            lines.Add("");
+
+            // Фильтрация
+            var filtered = _state.RecentRequests.AsEnumerable();
+            if (state.Filter == "success")
+                filtered = filtered.Where(r => r.Success);
+            else if (state.Filter == "errors")
+                filtered = filtered.Where(r => !r.Success);
+
+            if (!string.IsNullOrEmpty(state.Search))
+            {
+                filtered = filtered.Where(r => r.Query.Contains(state.Search, StringComparison.OrdinalIgnoreCase));
+            }
+
+            var list = filtered.ToList();
+            if (list.Count == 0)
+            {
+                lines.Add("  _Нет записей по текущему фильтру_");
+                lines.Add("");
+                lines.Add($"Страница {state.Page + 1}/1");
                 return string.Join("\n", lines);
             }
 
-            foreach (var request in _state.RecentRequests.Take(10))
+            // Пагинация
+            int pageSize = 10;
+            int totalPages = (int)Math.Ceiling(list.Count / (double)pageSize);
+            if (state.Page >= totalPages) state.Page = totalPages - 1;
+            if (state.Page < 0) state.Page = 0;
+
+            var paged = list.Skip(state.Page * pageSize).Take(pageSize).ToList();
+
+            lines.Add($"📄 *Страница {state.Page + 1}/{totalPages}* \\(всего {list.Count} записей\\)");
+            lines.Add("");
+
+            foreach (var request in paged)
             {
                 string time = request.Time.ToString("HH:mm:ss");
                 string status = request.Success ? "✅" : "❌";
-                string query = request.Query.Length > 20 ? request.Query.Substring(0, 20) + "..." : request.Query;
+                string query = request.Query.Length > 25 ? request.Query.Substring(0, 25) + "..." : request.Query;
                 lines.Add($"`[{Escape(time)}]` {status} `@{Escape(request.Username)}` \\(`{request.UserId}`\\): _{Escape(query)}_");
             }
 
             return string.Join("\n", lines);
+        }
+
+        public InlineKeyboardMarkup BuildDashboardMarkup(long userId)
+        {
+            if (!_state.DashboardStates.ContainsKey(userId))
+            {
+                _state.DashboardStates[userId] = new DashboardState();
+            }
+            var state = _state.DashboardStates[userId];
+
+            var buttons = new List<List<InlineKeyboardButton>>();
+
+            // Кнопки пагинации
+            var navButtons = new List<InlineKeyboardButton>();
+            navButtons.Add(InlineKeyboardButton.WithCallbackData("◀️ Назад", $"dash:page:{state.Page - 1}"));
+            navButtons.Add(InlineKeyboardButton.WithCallbackData($"{state.Page + 1}", $"dash:page:{state.Page}"));
+            navButtons.Add(InlineKeyboardButton.WithCallbackData("Вперед ▶️", $"dash:page:{state.Page + 1}"));
+            buttons.Add(navButtons);
+
+            // Фильтры
+            var filterButtons = new List<InlineKeyboardButton>();
+            string allLabel = state.Filter == "all" || state.Filter == null ? "✅ Все" : "Все";
+            string successLabel = state.Filter == "success" ? "✅ Успешные" : "Успешные";
+            string errorsLabel = state.Filter == "errors" ? "✅ Ошибки" : "Ошибки";
+            filterButtons.Add(InlineKeyboardButton.WithCallbackData(allLabel, "dash:filter:all"));
+            filterButtons.Add(InlineKeyboardButton.WithCallbackData(successLabel, "dash:filter:success"));
+            filterButtons.Add(InlineKeyboardButton.WithCallbackData(errorsLabel, "dash:filter:errors"));
+            buttons.Add(filterButtons);
+
+            // Дополнительные кнопки
+            var extraButtons = new List<InlineKeyboardButton>();
+            extraButtons.Add(InlineKeyboardButton.WithCallbackData("🔄 Обновить", "dash:refresh"));
+            if (!string.IsNullOrEmpty(state.Search))
+            {
+                extraButtons.Add(InlineKeyboardButton.WithCallbackData($"🔍 Сброс поиска", "dash:search:clear"));
+            }
+            else
+            {
+                extraButtons.Add(InlineKeyboardButton.WithCallbackData("🔍 Поиск", "dash:search"));
+            }
+            buttons.Add(extraButtons);
+
+            return new InlineKeyboardMarkup(buttons);
+        }
+
+        public void SetDashboardAwaitingSearch(long userId, bool awaiting)
+        {
+            if (!_state.DashboardStates.ContainsKey(userId))
+                _state.DashboardStates[userId] = new DashboardState();
+            _state.DashboardStates[userId].AwaitingSearch = awaiting;
+            _state.Save();
+        }
+
+        private void UpdateStatsFromRecent()
+        {
+            // Обновляем TodayRequests, TodaySuccess, TodayErrors
+            var today = DateTime.Today;
+            var todayRequests = _state.RecentRequests.Where(r => r.Time.Date == today).ToList();
+            _state.TodayRequests = todayRequests.Count;
+            _state.TodaySuccess = todayRequests.Count(r => r.Success);
+            _state.TodayErrors = todayRequests.Count(r => !r.Success);
+
+            // Обновляем PopularQueries (за все время, топ-20)
+            var allQueries = _state.RecentRequests
+                .GroupBy(r => r.Query)
+                .Select(g => new { Query = g.Key, Count = g.Count() })
+                .OrderByDescending(x => x.Count)
+                .Take(20);
+
+            _state.PopularQueries.Clear();
+            foreach (var item in allQueries)
+            {
+                _state.PopularQueries[item.Query] = item.Count;
+            }
         }
 
         private static string FormatUptime(TimeSpan uptime)

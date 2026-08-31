@@ -20,6 +20,13 @@ namespace XzBotCs.Models
         public HashSet<long> Subscribers { get; set; } = new HashSet<long>();
         public HashSet<long> ExtraAdmins { get; set; } = new HashSet<long>();
 
+        // Новые поля для статистики дашборда
+        public Dictionary<string, int> PopularQueries { get; set; } = new Dictionary<string, int>();
+        public int TodayRequests { get; set; }
+        public int TodaySuccess { get; set; }
+        public int TodayErrors { get; set; }
+        public Dictionary<long, DashboardState> DashboardStates { get; set; } = new Dictionary<long, DashboardState>();
+
         [JsonIgnore]
         public object SyncRoot { get; } = new object();
 
@@ -69,5 +76,13 @@ namespace XzBotCs.Models
         public string Username { get; set; } = "Unknown";
         public string Query { get; set; } = string.Empty;
         public bool Success { get; set; }
+    }
+
+    public class DashboardState
+    {
+        public int Page { get; set; } = 0;
+        public string Filter { get; set; } = "all";
+        public string Search { get; set; } = string.Empty;
+        public bool AwaitingSearch { get; set; } = false;
     }
 }

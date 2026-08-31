@@ -40,6 +40,13 @@ namespace XzBotCs
         private const int DefaultProxyPort = 8080;
         private const string DefaultProxyBaseUrl = "http://46.229.63.243:8080/img?u=";
         private const string DeveloperProfileUrl = "https://t.me/Tyta_Zdesyaa777";
+        private const string CallbackDashPage = "dash:page:";
+        private const string CallbackDashFilter = "dash:filter:";
+        private const string CallbackDashSort = "dash:sort:";
+        private const string CallbackDashSearch = "dash:search";
+        private const string CallbackDashRefresh = "dash:refresh";
+        private const string CallbackDashClearSearch = "dash:clear_search";
+        private const string CallbackDashNoop = "dash:noop";
 
         static async Task Main(string[] args)
         {
@@ -201,6 +208,28 @@ namespace XzBotCs
                             added = _state.Subscribers.Add(message.From.Id);
                         }
                         if (added) _state.Save();
+                    }
+
+                    // Обработка ввода поиска для дашборда
+                    if (message.Chat.Type == ChatType.Private && message.From != null && !messageText.StartsWith("/") &&
+                        _state.DashboardStates.TryGetValue(message.From.Id, out var pendingSearchState) && pendingSearchState.AwaitingSearch)
+                    {
+                        pendingSearchState.AwaitingSearch = false;
+                        string dashText = _statsService.BuildDashboardText(message.From.Id, page: 0, search: messageText.Trim());
+                        var dashMarkup = _statsService.BuildDashboardMarkup(message.From.Id);
+                        var dashButtons2 = dashMarkup.InlineKeyboard.ToList();
+                        dashButtons2.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
+                        dashMarkup = new InlineKeyboardMarkup(dashButtons2);
+                        try
+                        {
+                            await botClient.SendMessage(message.Chat.Id, dashText, parseMode: ParseMode.MarkdownV2, replyMarkup: dashMarkup, cancellationToken: cancellationToken);
+                        }
+                        catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("can't parse entities"))
+                        {
+                            Console.WriteLine($"Dashboard search markdown failed, fallback: {ex.Message}");
+                            await botClient.SendMessage(message.Chat.Id, dashText, replyMarkup: dashMarkup, cancellationToken: cancellationToken);
+                        }
+                        return;
                     }
 
                     if (messageText.StartsWith("/start"))
@@ -650,25 +679,72 @@ namespace XzBotCs
                     }
                     else if (callbackQuery.Data == "stats:dashboard")
                     {
-                        string text = _statsService.BuildDashboardText();
-                        var markup = new InlineKeyboardMarkup(new[] {
-                            new [] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") },
-                            new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:dashboard") }
-                        });
-                        try
-                        {
-                            if (callbackQuery.Message is Message { Type: MessageType.Photo } photoMsg)
-                            {
-                                await botClient.EditMessageCaption(photoMsg.Chat.Id, photoMsg.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
-                            }
-                            else
-                            {
-                                await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
-                            }
-                        }
-                        catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
+                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id);
+                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
+                        // Добавляем кнопку Назад к дашборду
+                        var dashButtons = markup.InlineKeyboard.ToList();
+                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
+                        markup = new InlineKeyboardMarkup(dashButtons);
+                        if (callbackQuery.Message != null)
+                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
 
                         await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data != null && callbackQuery.Data.StartsWith(CallbackDashPage))
+                    {
+                        string pageStr = callbackQuery.Data.Substring(CallbackDashPage.Length);
+                        if (int.TryParse(pageStr, out int newPage))
+                        {
+                            string text = _statsService.BuildDashboardText(callbackQuery.From.Id, page: newPage);
+                            var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
+                            var dashButtons = markup.InlineKeyboard.ToList();
+                            dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
+                            markup = new InlineKeyboardMarkup(dashButtons);
+                            if (callbackQuery.Message != null)
+                                await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
+                        }
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data != null && callbackQuery.Data.StartsWith(CallbackDashFilter))
+                    {
+                        string filter = callbackQuery.Data.Substring(CallbackDashFilter.Length);
+                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id, page: 0, filter: filter);
+                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
+                        var dashButtons = markup.InlineKeyboard.ToList();
+                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
+                        markup = new InlineKeyboardMarkup(dashButtons);
+                        if (callbackQuery.Message != null)
+                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data == CallbackDashRefresh)
+                    {
+                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id);
+                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
+                        var dashButtons = markup.InlineKeyboard.ToList();
+                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
+                        markup = new InlineKeyboardMarkup(dashButtons);
+                        if (callbackQuery.Message != null)
+                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data == "dash:search:clear")
+                    {
+                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id, page: 0, search: string.Empty);
+                        // Сбрасываем фильтр поиска
+                        if (_state.DashboardStates.TryGetValue(callbackQuery.From.Id, out var ds)) ds.Search = string.Empty;
+                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
+                        var dashButtons = markup.InlineKeyboard.ToList();
+                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
+                        markup = new InlineKeyboardMarkup(dashButtons);
+                        if (callbackQuery.Message != null)
+                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Поиск сброшен", cancellationToken: cancellationToken);
+                    }
+                    else if (callbackQuery.Data == CallbackDashSearch)
+                    {
+                        _statsService.SetDashboardAwaitingSearch(callbackQuery.From.Id, true);
+                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Отправьте текст для поиска в ЛС бота", showAlert: true, cancellationToken: cancellationToken);
                     }
                 }
                 else if (update.InlineQuery is { } inlineQuery)
@@ -694,7 +770,7 @@ namespace XzBotCs
                                 "no-access",
                                 "⛔ Нет доступа",
                                 new InputTextMessageContent("У вас нет доступа к логам."));
-                            
+
                             await TryAnswerInlineQueryAsync(
                                 botClient,
                                 inlineQuery.Id,
@@ -705,8 +781,8 @@ namespace XzBotCs
                             return;
                         }
 
-                        var dashboardText = _statsService.BuildDashboardText();
-                        
+                        var dashboardText = _statsService.BuildDashboardText(inlineQuery.From.Id);
+
                         var logsResult = new InlineQueryResultArticle(
                             "logs-dashboard",
                             "📋 Логи запросов",
@@ -715,13 +791,31 @@ namespace XzBotCs
                             Description = "Последние 10 запросов"
                         };
 
-                        await TryAnswerInlineQueryAsync(
+                        bool logsAnswered = await TryAnswerInlineQueryAsync(
                             botClient,
                             inlineQuery.Id,
                             new[] { logsResult },
                             cacheTime: 10,
                             isPersonal: true,
                             cancellationToken: cancellationToken);
+                        if (!logsAnswered)
+                        {
+                            // Fallback без MarkdownV2 если парсинг упал
+                            var fallbackResult = new InlineQueryResultArticle(
+                                "logs-dashboard",
+                                "📋 Логи запросов",
+                                new InputTextMessageContent(dashboardText))
+                            {
+                                Description = "Последние 10 запросов"
+                            };
+                            await TryAnswerInlineQueryAsync(
+                                botClient,
+                                inlineQuery.Id,
+                                new[] { fallbackResult },
+                                cacheTime: 10,
+                                isPersonal: true,
+                                cancellationToken: cancellationToken);
+                        }
                         return;
                     }
 
@@ -993,6 +1087,38 @@ namespace XzBotCs
                 new [] { InlineKeyboardButton.WithCallbackData(wmBtnText, "toggle_wm") },
                 new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:refresh") }
             });
+        }
+
+        private static async Task EditDashboardWithFallbackAsync(ITelegramBotClient botClient, Message message, string text, InlineKeyboardMarkup markup, CancellationToken ct)
+        {
+            try
+            {
+                if (message is { Type: MessageType.Photo })
+                {
+                    await botClient.EditMessageCaption(message.Chat.Id, message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                }
+                else
+                {
+                    await botClient.EditMessageText(message.Chat.Id, message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
+                }
+            }
+            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("can't parse entities"))
+            {
+                Console.WriteLine($"Dashboard markdown parse failed, fallback to plain: {ex.Message}");
+                Console.WriteLine($"Text was: {text}");
+                try
+                {
+                    if (message is { Type: MessageType.Photo })
+                        await botClient.EditMessageCaption(message.Chat.Id, message.Id, text, replyMarkup: markup, cancellationToken: ct);
+                    else
+                        await botClient.EditMessageText(message.Chat.Id, message.Id, text, replyMarkup: markup, cancellationToken: ct);
+                }
+                catch (Exception ex2)
+                {
+                    Console.WriteLine($"Fallback also failed: {ex2.Message}");
+                }
+            }
+            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
         }
 
         private static string? NormalizeProxyBaseUrl(string? proxyBaseUrl)
