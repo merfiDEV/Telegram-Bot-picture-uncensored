@@ -34,6 +34,7 @@ namespace XzBotCs
         private static string? _botUsername;
         private static volatile bool _proxyListenerStarted;
         private static readonly SemaphoreSlim _watermarkUploadLock = new SemaphoreSlim(3);
+        private static readonly Random _random = new Random();
 
         private const int DefaultProxyPort = 8080;
         private const string DefaultProxyBaseUrl = "http://46.229.63.243:8080/img?u=";
@@ -126,6 +127,15 @@ namespace XzBotCs
             return text.Replace("\\", "\\\\").Replace("_", "\\_").Replace("*", "\\*").Replace("[", "\\[").Replace("]", "\\]").Replace("(", "\\(").Replace(")", "\\)").Replace("~", "\\~").Replace("`", "\\`").Replace(">", "\\>").Replace("#", "\\#").Replace("+", "\\+").Replace("-", "\\-").Replace("=", "\\=").Replace("|", "\\|").Replace("{", "\\{").Replace("}", "\\}").Replace(".", "\\.").Replace("!", "\\!");
         }
 
+        private static bool TryParseFlag(ref string query, string flag)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(query, $@"(^|\s){System.Text.RegularExpressions.Regex.Escape(flag)}(\s|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!match.Success) return false;
+
+            query = System.Text.RegularExpressions.Regex.Replace(query, $@"(^|\s){System.Text.RegularExpressions.Regex.Escape(flag)}(\s|$)", " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+            return true;
+        }
+
         private static string ReadEnvValue(string line, string key)
         {
             return line.Substring(key.Length).Trim().Trim('"').Trim('\'');
@@ -212,7 +222,8 @@ namespace XzBotCs
                         string text = "*🤖 Бот работает в асинхронном inline режиме!*\n\n" +
                                      "Чтобы использовать бота, откройте любой чат и введите:\n" +
                                      "`@имя_бота ваш_запрос`\n\n" +
-                                     "⚡ *Новинка:* Используйте флаг `--gif` в конце запроса для поиска анимаций.\n\n" +
+                                     "⚡ Используйте флаг `--gif` для анимаций и `--random` для случайной картинки.\n" +
+                                     "🎲 Команда `/random тема` — «мне повезёт»: одна случайная картинка по теме.\n\n" +
                                      "⚠️ *Дисклеймер*\n" +
                                      "Данный бот автоматически обрабатывает поисковые запросы пользователей и " +
                                      "показывает результаты из *открытых источников* в интернете.\n\n" +
@@ -223,6 +234,25 @@ namespace XzBotCs
                         
                         var builder = new InlineKeyboardMarkup(InlineKeyboardButton.WithSwitchInlineQueryCurrentChat("🔍 Попробовать поиск", ""));
                         await botClient.SendMessage(message.Chat.Id, text, parseMode: ParseMode.Markdown, replyMarkup: builder, cancellationToken: cancellationToken);
+                    }
+                    else if (messageText == "/help")
+                    {
+                        string helpText =
+                            "*📖 Справка*\n\n" +
+                            "Бот ищет картинки через inline\\-режим\\. Введите `@имя_бота запрос` в любом чате\\.\n\n" +
+                            "*Флаги поиска:*\n" +
+                            "— `--gif` — искать анимации\n" +
+                            "— `--random` — одна случайная картинка по теме\n\n" +
+                            "*Команды:*\n" +
+                            "— `/random тема` — «мне повезёт»: случайная картинка\n" +
+                            "— `/start` — приветствие\n" +
+                            "— `/help` — эта справка\n\n" +
+                            "Примеры:\n" +
+                            "`@имя_бота котики`\n" +
+                            "`@имя_бота dance --gif`\n" +
+                            "`@имя_бота cyberpunk --random`\n" +
+                            "`/random лес`";
+                        await botClient.SendMessage(message.Chat.Id, helpText, parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
                     }
                     else if (messageText == "/stats")
                     {
@@ -456,13 +486,11 @@ namespace XzBotCs
                         _prefs.Save();
 
                         string prefixText =
-                            "✦ ────────────── ✦\n" +
-                            "🏷 *Префикс обновлён*\n\n" +
-                            $"🆔 ID: `{targetId}`\n" +
+                            "*— Статус изменён —*\n" +
+                            $"ID: `{targetId}`\n" +
                             (string.IsNullOrEmpty(prefix)
-                                ? "Префикс очищен\\.\n"
-                                : $"Новый префикс: {Escape(prefix)}\n") +
-                            "✦ ────────────── ✦";
+                                ? "Префикс снят\\."
+                                : $"Префикс: {Escape(prefix)}");
 
                         await botClient.SendMessage(
                             message.Chat.Id,
@@ -480,9 +508,7 @@ namespace XzBotCs
 
                         var lines = new List<string>
                         {
-                            "✦ ────────────── ✦",
-                            "👑 *Список администраторов*",
-                            ""
+                            "*Администрация*"
                         };
 
                         foreach (var adminId in _adminIds.OrderBy(id => id))
@@ -490,18 +516,37 @@ namespace XzBotCs
                             string? username = await TryGetUsernameAsync(botClient, adminId, cancellationToken);
                             string display = string.IsNullOrEmpty(username) ? "без username" : $"@{username}";
                             _prefs.Prefixes.TryGetValue(adminId, out string? pref);
-                            string prefix = string.IsNullOrEmpty(pref) ? "" : $"{Escape(pref)} ";
-                            lines.Add($"• {prefix}{Escape(display)} — `{adminId}`");
+                            string prefix = string.IsNullOrEmpty(pref) ? "" : $"{Escape(pref)} — ";
+                            lines.Add($"{prefix}{Escape(display)} — `{adminId}`");
                         }
-
-                        lines.Add("");
-                        lines.Add("✦ ────────────── ✦");
 
                         await botClient.SendMessage(
                             message.Chat.Id,
                             string.Join("\n", lines),
                             parseMode: ParseMode.MarkdownV2,
                             cancellationToken: cancellationToken);
+                    }
+                    else if (messageText.StartsWith("/random"))
+                    {
+                        string cmdPrefix = "/random";
+                        if (messageText.StartsWith("/random@"))
+                        {
+                            int spaceIndex = messageText.IndexOf(' ');
+                            cmdPrefix = spaceIndex >= 0 ? messageText.Substring(0, spaceIndex) : messageText;
+                        }
+
+                        string topic = messageText.Substring(cmdPrefix.Length).Trim();
+                        if (string.IsNullOrEmpty(topic))
+                        {
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                "🎲 Укажите тему\\.\nПример: `/random кот`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: cancellationToken);
+                            return;
+                        }
+
+                        await SendRandomImageAsync(message.Chat.Id, topic, cancellationToken);
                     }
                     else if (messageText.StartsWith("/upt"))
                     {
@@ -656,8 +701,9 @@ namespace XzBotCs
                         return;
                     }
 
+                    bool isRandom = TryParseFlag(ref query, "--random");
                     int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
-                    Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}");
+                    Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}, random={isRandom}");
                     _statsService.IncrementUsage();
                     int resultLimit = _state.IsWatermarkEnabled ? 6 : 30;
                     var searchResponse = await _searchService.SearchImagesDetailedAsync(query, startIndex: offset + 1, limit: resultLimit);
@@ -723,6 +769,11 @@ namespace XzBotCs
                         }
                     }
 
+                    if (isRandom && results.Count > 1)
+                    {
+                        results = [results[_random.Next(results.Count)]];
+                    }
+
                     string nextOffset = searchResults.Count > 0 ? (offset + searchResults.Count).ToString() : "";
                     bool answered = await TryAnswerInlineQueryAsync(
                         botClient,
@@ -747,6 +798,51 @@ namespace XzBotCs
         {
             Console.WriteLine(exception);
             return Task.CompletedTask;
+        }
+
+        static async Task SendRandomImageAsync(long chatId, string topic, CancellationToken ct)
+        {
+            await _botClient!.SendChatAction(chatId, ChatAction.UploadPhoto, cancellationToken: ct);
+
+            int limit = _state.IsWatermarkEnabled ? 6 : 30;
+            var response = await _searchService.SearchImagesDetailedAsync(topic, startIndex: 1, limit: limit);
+            var items = response.Items;
+            if (items.Count == 0)
+            {
+                await _botClient.SendMessage(
+                    chatId,
+                    "😕 Ничего не нашлось по запросу\\. Попробуй другую тему\\.",
+                    parseMode: ParseMode.MarkdownV2,
+                    cancellationToken: ct);
+                return;
+            }
+
+            _statsService.RecordRequest(0, null, topic + " --random", true);
+            _state.Save();
+
+            var pick = items[_random.Next(items.Count)];
+            var markup = BuildSourceMarkup(pick);
+
+            if (pick.IsGif)
+            {
+                await _botClient.SendAnimation(
+                    chatId,
+                    InputFile.FromUri(pick.Url),
+                    caption: $"🎲 *{Escape(topic)}*",
+                    parseMode: ParseMode.MarkdownV2,
+                    replyMarkup: markup,
+                    cancellationToken: ct);
+            }
+            else
+            {
+                await _botClient.SendPhoto(
+                    chatId,
+                    InputFile.FromUri(pick.Url),
+                    caption: $"🎲 *{Escape(topic)}*",
+                    parseMode: ParseMode.MarkdownV2,
+                    replyMarkup: markup,
+                    cancellationToken: ct);
+            }
         }
 
         static async Task SendBroadcastAsync(long adminChatId, string announcement, CancellationToken ct)
