@@ -230,6 +230,7 @@ namespace XzBotCs.Services
 
                 // Обновляем агрегированную статистику
                 UpdateStatsFromRecent();
+                _state.Save();
             }
         }
 
