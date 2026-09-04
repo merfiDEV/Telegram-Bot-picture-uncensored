@@ -938,27 +938,93 @@ namespace XzBotCs
             _statsService.RecordRequest(0, null, topic + " --random", true);
             _state.Save();
 
-            var pick = items[Random.Shared.Next(items.Count)];
-            var markup = BuildSourceMarkup(pick);
+            // Перемешиваем список элементов, чтобы совершать попытки отправки по случайному порядку
+            var shuffledItems = items.OrderBy(_ => Random.Shared.Next()).ToList();
+            bool sent = false;
 
-            if (pick.IsGif)
+            foreach (var pick in shuffledItems)
             {
-                await _botClient.SendAnimation(
-                    chatId,
-                    InputFile.FromUri(pick.Url),
-                    caption: $"🎲 *{Escape(topic)}*",
-                    parseMode: ParseMode.MarkdownV2,
-                    replyMarkup: markup,
-                    cancellationToken: ct);
+                var markup = BuildSourceMarkup(pick);
+                var caption = $"🎲 *{Escape(topic)}*";
+
+                try
+                {
+                    if (pick.IsGif)
+                    {
+                        await _botClient.SendAnimation(
+                            chatId,
+                            InputFile.FromUri(pick.Url),
+                            caption: caption,
+                            parseMode: ParseMode.MarkdownV2,
+                            replyMarkup: markup,
+                            cancellationToken: ct);
+                    }
+                    else
+                    {
+                        await _botClient.SendPhoto(
+                            chatId,
+                            InputFile.FromUri(pick.Url),
+                            caption: caption,
+                            parseMode: ParseMode.MarkdownV2,
+                            replyMarkup: markup,
+                            cancellationToken: ct);
+                    }
+                    sent = true;
+                    break;
+                }
+                catch (ApiRequestException ex) when (ex.Message.Contains("failed to get HTTP URL content") || ex.ErrorCode == 400)
+                {
+                    // Ошибка получения контента по URL со стороны Telegram. Пробуем скачать локально и отправить потоком.
+                    try
+                    {
+                        using var httpResp = await _httpClient.GetAsync(pick.Url, HttpCompletionOption.ResponseHeadersRead, ct);
+                        if (httpResp.IsSuccessStatusCode)
+                        {
+                            await using var stream = await httpResp.Content.ReadAsStreamAsync(ct);
+                            var filename = pick.IsGif ? "animation.gif" : "photo.jpg";
+                            var inputFile = InputFile.FromStream(stream, filename);
+
+                            if (pick.IsGif)
+                            {
+                                await _botClient.SendAnimation(
+                                    chatId,
+                                    inputFile,
+                                    caption: caption,
+                                    parseMode: ParseMode.MarkdownV2,
+                                    replyMarkup: markup,
+                                    cancellationToken: ct);
+                            }
+                            else
+                            {
+                                await _botClient.SendPhoto(
+                                    chatId,
+                                    inputFile,
+                                    caption: caption,
+                                    parseMode: ParseMode.MarkdownV2,
+                                    replyMarkup: markup,
+                                    cancellationToken: ct);
+                            }
+                            sent = true;
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        // Пропускаем проблемную ссылку и пробуем следующий картинку
+                    }
+                }
+                catch
+                {
+                    // При иных ошибках отправки пробуем следующий найденный объект
+                }
             }
-            else
+
+            if (!sent)
             {
-                await _botClient.SendPhoto(
+                await _botClient.SendMessage(
                     chatId,
-                    InputFile.FromUri(pick.Url),
-                    caption: $"🎲 *{Escape(topic)}*",
+                    "😕 Не удалось загрузить ни одно изображение по вашему запросу\\. Попробуйте другую тему\\.",
                     parseMode: ParseMode.MarkdownV2,
-                    replyMarkup: markup,
                     cancellationToken: ct);
             }
         }
