@@ -19,6 +19,8 @@ namespace XzBotCs.Models
         public Dictionary<string, int> DailyUsage { get; set; } = new Dictionary<string, int>();
         public HashSet<long> Subscribers { get; set; } = new HashSet<long>();
         public HashSet<long> ExtraAdmins { get; set; } = new HashSet<long>();
+        public bool AllowNsfw { get; set; } = false;
+        public Dictionary<long, bool> UserNsfwSettings { get; set; } = new Dictionary<long, bool>();
 
         // Новые поля для статистики дашборда
         public Dictionary<string, int> PopularQueries { get; set; } = new Dictionary<string, int>();
