@@ -162,7 +162,14 @@ namespace XzBotCs.Services
                 if (!murl.StartsWith("http")) continue;
                 if (murl.Contains("<") || murl.Contains(">") || murl.Contains("\"") || murl.Contains(" ")) continue;
 
-                bool isGif = gifByFilter || murl.ToLowerInvariant().Split('?')[0].EndsWith(".gif");
+                // GIF только если URL реально ведёт на .gif. Фильтр photo-animatedgif
+                // может возвращать .webp/.apng/.jpg — их нельзя помечать как анимацию.
+                bool isGif = murl.ToLowerInvariant().Split('?')[0].EndsWith(".gif");
+                if (gifByFilter && !isGif)
+                {
+                    // В режиме --gif посторонние форматы отбрасываем полностью.
+                    continue;
+                }
                 string imageHash = GetImageHash(murl);
                 if (!seenHashes.Add(imageHash)) continue;
 

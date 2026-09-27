@@ -353,8 +353,21 @@ namespace XzBotCs.Services
                     if (string.IsNullOrEmpty(source)) source = image;
 
                     string title = GetJsonString(item, "title");
-                    bool gif = isGif || GetJsonString(item, "type").Contains("gif", StringComparison.OrdinalIgnoreCase) ||
-                               image.ToLowerInvariant().Split('?')[0].EndsWith(".gif");
+                    string itemType = GetJsonString(item, "type");
+                    string cleanImage = image.ToLowerInvariant().Split('?')[0];
+
+                    // GIF определяем по фактическому типу/расширению, а НЕ по флагу поиска:
+                    // иначе при --gif в выдачу попадают обычные фото.
+                    bool isRealGif = itemType.Contains("gif", StringComparison.OrdinalIgnoreCase) ||
+                                     cleanImage.EndsWith(".gif");
+
+                    if (isGif && !isRealGif)
+                    {
+                        // В режиме --gif отбрасываем всё, что не является настоящим GIF.
+                        continue;
+                    }
+
+                    bool gif = isRealGif;
 
                     string hash = GetImageHash(image);
                     if (!seen.Add(hash)) continue;
