@@ -164,7 +164,7 @@ namespace XzBotCs.Handlers
         private async Task RefreshStatsAsync(long chatId, int messageId, CancellationToken ct)
         {
             var (bingOk, bingStatus) = await _searchService.CheckBingAsync();
-            var text = _statsService.BuildStatsText(bingOk, bingStatus);
+            var text = _statsService.BuildStatsText(new[] { ("bing", "Bing", bingOk, bingStatus) });
             var markup = _commandHandler.BuildStatsMarkup();
             try
             {

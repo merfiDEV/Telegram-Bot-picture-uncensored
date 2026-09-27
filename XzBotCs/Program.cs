@@ -14,6 +14,7 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.InlineQueryResults;
 using Telegram.Bot.Types.ReplyMarkups;
+using XzBotCs.Interfaces;
 using XzBotCs.Models;
 using XzBotCs.Services;
 
@@ -23,8 +24,9 @@ namespace XzBotCs
     {
         private static ITelegramBotClient? _botClient;
         private static BotState _state = BotState.Load();
-        private static BingSearchService _searchService = new BingSearchService();
-        private static WatermarkService _watermarkService = new WatermarkService();
+                private static SearchProviderRegistry _searchRegistry = new SearchProviderRegistry(_state);
+                private static ISearchService _searchService = new RoutingSearchService(_searchRegistry);
+                private static WatermarkService _watermarkService = new WatermarkService();
         private static BotStatsService _statsService = new BotStatsService(_state);
         private static PrefStore _prefs = PrefStore.Load();
         private static HttpClient _httpClient = new HttpClient();
@@ -98,7 +100,16 @@ namespace XzBotCs
 
             using var cts = new CancellationTokenSource();
 
-            var receiverOptions = new ReceiverOptions
+                        // Graceful shutdown: по Ctrl+C отменяем задачи, чтобы Main успел сохранить состояние.
+                        Console.CancelKeyPress += (_, e) =>
+                        {
+                            e.Cancel = true;
+                            Console.WriteLine("Shutdown requested, stopping...");
+                            cts.Cancel();
+                        };
+                        AppDomain.CurrentDomain.ProcessExit += (_, _) => _state.Save();
+
+                        var receiverOptions = new ReceiverOptions
             {
                 AllowedUpdates = Array.Empty<UpdateType>()
             };
@@ -319,20 +330,26 @@ namespace XzBotCs
                         string logsPath = "../logs";
                         if (!Directory.Exists(logsPath)) Directory.CreateDirectory(logsPath);
 
-                        string zipPath = Path.Combine(Path.GetTempPath(), $"logs_{Guid.NewGuid():N}.zip");
-                        try
-                        {
-                            using (var fs = new FileStream(zipPath, FileMode.Create))
-                            using (var archive = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
-                            {
-                                foreach (var file in Directory.GetFiles(logsPath))
-                                {
-                                    var entry = archive.CreateEntry(Path.GetFileName(file));
-                                    using var entryStream = entry.Open();
-                                    using var fileStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                                    fileStream.CopyTo(entryStream);
-                                }
-                            }
+                        // Ротация: оставляем только 5 самых свежих логов, чтобы архив не превышал лимит Telegram.
+                                                var logFiles = new DirectoryInfo(logsPath).GetFiles("logs_*.txt")
+                                                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                                                    .ToList();
+                                                var filesToZip = logFiles.Take(5).ToList();
+
+                                                string zipPath = Path.Combine(Path.GetTempPath(), $"logs_{Guid.NewGuid():N}.zip");
+                                                try
+                                                {
+                                                    using (var fs = new FileStream(zipPath, FileMode.Create))
+                                                    using (var archive = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+                                                    {
+                                                        foreach (var file in filesToZip)
+                                                        {
+                                                            var entry = archive.CreateEntry(file.Name);
+                                                            using var entryStream = entry.Open();
+                                                            using var fileStream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                                                            fileStream.CopyTo(entryStream);
+                                                        }
+                                                    }
 
                             using var stream = System.IO.File.OpenRead(zipPath);
                             await botClient.SendDocument(message.Chat.Id, InputFile.FromStream(stream, "logs.zip"), cancellationToken: cancellationToken);
@@ -551,9 +568,13 @@ namespace XzBotCs
                             parseMode: ParseMode.MarkdownV2,
                             cancellationToken: cancellationToken);
                     }
-                    else if (messageText.StartsWith("/admins"))
-                    {
-                        if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
+                    else if (messageText.StartsWith("/provider"))
+                                        {
+                                            await HandleProviderCommandAsync(botClient, message, messageText, cancellationToken);
+                                        }
+                                        else if (messageText.StartsWith("/admins"))
+                                        {
+                                            if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
                         {
                             await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
                             return;
@@ -645,11 +666,24 @@ namespace XzBotCs
                         await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, $"Ватермарка: {(_state.IsWatermarkEnabled ? "ВКЛ" : "ВЫКЛ")}", cancellationToken: cancellationToken);
                         await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
                     }
-                    else if (callbackQuery.Data == "stats:refresh")
-                    {
-                        await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
-                    }
+                    else if (callbackQuery.Data == "toggle_provider")
+                                        {
+                                            string? next = _searchRegistry.FallbackKey;
+                                            if (next != null && _searchRegistry.SetActive(next))
+                                            {
+                                                await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, $"Провайдер: {_searchRegistry.ActiveKey.ToUpperInvariant()}", cancellationToken: cancellationToken);
+                                            }
+                                            else
+                                            {
+                                                await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Не удалось переключить", showAlert: true, cancellationToken: cancellationToken);
+                                            }
+                                            await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
+                                        }
+                                        else if (callbackQuery.Data == "stats:refresh")
+                                        {
+                                            await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
+                                            await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
+                                        }
                     else if (callbackQuery.Data == "stats:back")
                     {
                         await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
@@ -820,22 +854,23 @@ namespace XzBotCs
                     }
 
                     bool isRandom = TryParseFlag(ref query, "--random");
-                    int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
-                    Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}, random={isRandom}");
-                    _statsService.IncrementUsage();
-                    int resultLimit = _state.IsWatermarkEnabled ? 6 : 30;
-                    var searchResponse = await _searchService.SearchImagesDetailedAsync(query, startIndex: offset + 1, limit: resultLimit);
-                    if (searchResponse.ResponseTime > TimeSpan.Zero)
-                    {
-                        _statsService.RecordResponseTime(searchResponse.ResponseTime);
-                    }
-                    if (!string.IsNullOrEmpty(searchResponse.ErrorType))
-                    {
-                        _statsService.RecordError(searchResponse.ErrorType);
-                    }
+                                        int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
+                                        Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}, random={isRandom}");
+                                        _statsService.IncrementUsage();
+                                        int resultLimit = _state.IsWatermarkEnabled ? 6 : 30;
+                                        var searchResponse = await _searchService.SearchImagesDetailedAsync(query, startIndex: offset + 1, limit: resultLimit);
+                                        if (searchResponse.ResponseTime > TimeSpan.Zero)
+                                        {
+                                            _statsService.RecordResponseTime(searchResponse.ResponseTime);
+                                            _statsService.RecordResponseTime(_searchRegistry.ActiveKey, searchResponse.ResponseTime);
+                                        }
+                                        if (!string.IsNullOrEmpty(searchResponse.ErrorType))
+                                        {
+                                            _statsService.RecordError(searchResponse.ErrorType);
+                                        }
 
-                    var searchResults = searchResponse.Items;
-                    Console.WriteLine($"Search returned {searchResults.Count} results for '{query}'");
+                                        var searchResults = searchResponse.Items;
+                                                                                Console.WriteLine($"Search returned {searchResults.Count} results for '{query}'");
 
                     var watermarkedFileIds = new Dictionary<string, string?>();
                     if (_state.IsWatermarkEnabled)
@@ -916,6 +951,50 @@ namespace XzBotCs
         {
             Console.WriteLine(exception);
             return Task.CompletedTask;
+        }
+
+        static async Task HandleProviderCommandAsync(ITelegramBotClient botClient, Message message, string messageText, CancellationToken ct)
+        {
+            if (_adminIds.Count == 0 || message.From?.Id == null || !_adminIds.Contains(message.From.Id))
+            {
+                await botClient.SendMessage(message.Chat.Id, "⛔ Нет доступа", parseMode: ParseMode.MarkdownV2, cancellationToken: ct);
+                return;
+            }
+
+            // Первый токен — сама команда (поддерживает /provider@botname). Отрезаем
+                        // именно его, а не фиксированную строку "/provider", иначе "/providers ddg"
+                        // превращается в аргумент "s ddg".
+                        int firstSpace = messageText.IndexOfAny(new[] { ' ', '\t' });
+                        string arg = (firstSpace >= 0 ? messageText.Substring(firstSpace + 1) : string.Empty)
+                            .Trim().ToLowerInvariant();
+
+                        if (string.IsNullOrEmpty(arg))
+                        {
+                            var available = string.Join(", ", _searchRegistry.All.Select(p => $"{p.Key} ({p.DisplayName})"));
+                            await botClient.SendMessage(
+                                message.Chat.Id,
+                                $"🔎 *Провайдер поиска*\\nАктивный: `{Escape(_searchRegistry.ActiveKey)}`\\nДоступные: {Escape(available)}\\n\\nИспользование: `/provider bing` или `/provider ddg`",
+                                parseMode: ParseMode.MarkdownV2,
+                                cancellationToken: ct);
+                            return;
+                        }
+
+                        if (_searchRegistry.SetActive(arg))
+            {
+                await botClient.SendMessage(
+                    message.Chat.Id,
+                    $"✅ Провайдер переключён на `{Escape(_searchRegistry.ActiveKey)}`",
+                    parseMode: ParseMode.MarkdownV2,
+                    cancellationToken: ct);
+            }
+            else
+            {
+                await botClient.SendMessage(
+                    message.Chat.Id,
+                    $"⚠️ Неизвестный провайдер: `{Escape(arg)}`",
+                    parseMode: ParseMode.MarkdownV2,
+                    cancellationToken: ct);
+            }
         }
 
         static async Task SendRandomImageAsync(long chatId, string topic, CancellationToken ct)
@@ -1097,10 +1176,10 @@ namespace XzBotCs
         }
 
         static async Task SendStatsAsync(long chatId, CancellationToken ct)
-        {
-            var (bingOk, bingStatus) = await _searchService.CheckBingAsync();
-            var text = _statsService.BuildStatsText(bingOk, bingStatus);
-            var markup = BuildStatsMarkup();
+                {
+                    var providerStatuses = await _searchRegistry.CheckAllAsync();
+                    var text = _statsService.BuildStatsText(providerStatuses);
+                    var markup = BuildStatsMarkup();
             
             var chartBytes = _statsService.GenerateChartImage();
             if (chartBytes.Length > 0)
@@ -1115,10 +1194,10 @@ namespace XzBotCs
         }
 
         static async Task RefreshStatsAsync(long chatId, int messageId, CancellationToken ct)
-        {
-            var (bingOk, bingStatus) = await _searchService.CheckBingAsync();
-            var text = _statsService.BuildStatsText(bingOk, bingStatus);
-            var markup = BuildStatsMarkup();
+                {
+                    var providerStatuses = await _searchRegistry.CheckAllAsync();
+                    var text = _statsService.BuildStatsText(providerStatuses);
+                    var markup = BuildStatsMarkup();
             try
             {
                 var chartBytes = _statsService.GenerateChartImage();
@@ -1147,12 +1226,13 @@ namespace XzBotCs
         static InlineKeyboardMarkup BuildStatsMarkup()
         {
             string wmBtnText = _state.IsWatermarkEnabled ? "❌ Выключить ватермарку" : "✅ Включить ватермарку";
-            return new InlineKeyboardMarkup(new[]
-            {
-                new [] { InlineKeyboardButton.WithCallbackData("📈 Метрики", "stats:metrics"), InlineKeyboardButton.WithCallbackData("📋 Дашборд", "stats:dashboard") },
-                new [] { InlineKeyboardButton.WithCallbackData(wmBtnText, "toggle_wm") },
-                new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:refresh") }
-            });
+                        string providerLabel = _searchRegistry.ActiveKey == SearchProviderRegistry.DuckDuckGoKey ? "🔎 DDG" : "🔎 Bing";
+                        return new InlineKeyboardMarkup(new[]
+                        {
+                            new [] { InlineKeyboardButton.WithCallbackData("📈 Метрики", "stats:metrics"), InlineKeyboardButton.WithCallbackData("📋 Дашборд", "stats:dashboard") },
+                            new [] { InlineKeyboardButton.WithCallbackData(wmBtnText, "toggle_wm") },
+                            new [] { InlineKeyboardButton.WithCallbackData(providerLabel, "toggle_provider"), InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:refresh") }
+                        });
         }
 
         private static async Task EditDashboardWithFallbackAsync(ITelegramBotClient botClient, Message message, string text, InlineKeyboardMarkup markup, CancellationToken ct)

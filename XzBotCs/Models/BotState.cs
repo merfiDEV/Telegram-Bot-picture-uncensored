@@ -13,6 +13,9 @@ namespace XzBotCs.Models
         public string WatermarkText { get; set; } = "Грешок by MDEV";
         public DateTime StartedAt { get; set; } = DateTime.Now;
         public List<double> ResponseTimesMs { get; set; } = new List<double>();
+
+        /// <summary>Времена ответа по провайдерам: ключ — "bing"/"ddg", значение — последние N замеров.</summary>
+        public Dictionary<string, List<double>> ResponseTimesByProvider { get; set; } = new Dictionary<string, List<double>>();
         public Dictionary<string, int> ErrorDetails { get; set; } = new Dictionary<string, int>();
         public List<RequestRecord> RecentRequests { get; set; } = new List<RequestRecord>();
         public Dictionary<string, string> WatermarkFileIds { get; set; } = new Dictionary<string, string>();
@@ -21,6 +24,9 @@ namespace XzBotCs.Models
         public HashSet<long> ExtraAdmins { get; set; } = new HashSet<long>();
         public bool AllowNsfw { get; set; } = false;
         public Dictionary<long, bool> UserNsfwSettings { get; set; } = new Dictionary<long, bool>();
+
+        /// <summary>Активный провайдер поиска изображений: "bing" или "ddg".</summary>
+        public string SearchProvider { get; set; } = "bing";
 
         // Новые поля для статистики дашборда
         public Dictionary<string, int> PopularQueries { get; set; } = new Dictionary<string, int>();

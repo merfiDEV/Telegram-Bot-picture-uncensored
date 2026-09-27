@@ -105,6 +105,7 @@ var dashboardText = _statsService.BuildDashboardText();
             if (searchResponse.ResponseTime > TimeSpan.Zero)
             {
                 _statsService.RecordResponseTime(searchResponse.ResponseTime);
+                _statsService.RecordResponseTime(_searchService.ActiveProviderKey, searchResponse.ResponseTime);
             }
             if (!string.IsNullOrEmpty(searchResponse.ErrorType))
             {

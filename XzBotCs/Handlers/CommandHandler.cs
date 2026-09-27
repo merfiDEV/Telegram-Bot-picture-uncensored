@@ -69,7 +69,7 @@ namespace XzBotCs.Handlers
             }
 
             var (bingOk, bingStatus) = await _searchService.CheckBingAsync();
-            var text = _statsService.BuildStatsText(bingOk, bingStatus);
+            var text = _statsService.BuildStatsText(new[] { ("bing", "Bing", bingOk, bingStatus) });
             var markup = BuildStatsMarkup();
 
             var chartBytes = _statsService.GenerateChartImage();

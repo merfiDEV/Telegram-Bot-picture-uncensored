@@ -41,7 +41,6 @@ namespace XzBotCs.Services
                     }
                     else
                     {
-                        // Попытка более гибкого парсинга
                         if (DateTime.TryParse(kv.Key, out var dt2))
                         {
                             pointsList.Add(new KeyValuePair<DateTime, int>(dt2, kv.Value));
@@ -56,7 +55,6 @@ namespace XzBotCs.Services
                 var sortedStats = pointsList.OrderBy(x => x.Key).Select(x => new KeyValuePair<string, int>(x.Key.ToString("dd.MM"), x.Value)).ToList();
                 if (sortedStats.Count == 0)
                 {
-                    // Возвращаем заглушку с надписью "Нет данных"
                     return CreatePlaceholderImage("Нет данных");
                 }
 
@@ -65,10 +63,8 @@ namespace XzBotCs.Services
                 using var bitmap = new SKBitmap(width, height);
                 using var canvas = new SKCanvas(bitmap);
 
-                // Цвета и отступы
                 var bgColor = new SKColor(11, 18, 32);
                 var gridColor = new SKColor(60, 75, 90, 160);
-                var axisColor = new SKColor(80, 100, 120);
                 var lineColor = new SKColor(33, 150, 243);
                 var fillStart = new SKColor(33, 150, 243, 120);
 
@@ -81,7 +77,6 @@ namespace XzBotCs.Services
                 int maxVal = sortedStats.Max(x => x.Value);
                 if (maxVal == 0) maxVal = 1;
 
-                // Горизонтальные сетки и подписи Y
                 int yTicks = 4;
                 using var gridPaint = new SKPaint { Color = gridColor, StrokeWidth = 1, IsAntialias = true };
                 using var labelPaint = new SKPaint { Color = SKColors.LightGray, IsAntialias = true };
@@ -91,11 +86,9 @@ namespace XzBotCs.Services
                     float yy = top + (plotHeight * i / (float)yTicks);
                     canvas.DrawLine(left, yy, left + plotWidth, yy, gridPaint);
                     int value = (int)Math.Round(maxVal * (1 - i / (float)yTicks));
-                    var label = value.ToString();
-                    canvas.DrawText(label, 8, yy + 5, labelFont, labelPaint);
+                    canvas.DrawText(value.ToString(), 8, yy + 5, labelFont, labelPaint);
                 }
 
-                // Точки данных
                 float xStep = plotWidth / (float)(sortedStats.Count > 1 ? sortedStats.Count - 1 : 1);
                 var points = new List<SKPoint>();
                 for (int i = 0; i < sortedStats.Count; i++)
@@ -105,7 +98,6 @@ namespace XzBotCs.Services
                     points.Add(new SKPoint(x, y));
                 }
 
-                // Заливка под линией
                 using var fillPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
                 fillPaint.Shader = SKShader.CreateLinearGradient(new SKPoint(0, top), new SKPoint(0, top + plotHeight), new[] { fillStart, SKColors.Transparent }, null, SKShaderTileMode.Clamp);
                 using var fillPath = new SKPath();
@@ -115,18 +107,15 @@ namespace XzBotCs.Services
                 fillPath.Close();
                 canvas.DrawPath(fillPath, fillPaint);
 
-                // Тень линии
                 using var shadowPaint = new SKPaint { IsAntialias = true, Color = SKColors.Black.WithAlpha(90), StrokeWidth = 8, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round };
                 using var path = new SKPath();
                 path.MoveTo(points[0]);
                 for (int i = 1; i < points.Count; i++) path.LineTo(points[i]);
                 canvas.DrawPath(path, shadowPaint);
 
-                // Основная линия
                 using var linePaint = new SKPaint { IsAntialias = true, Color = lineColor, StrokeWidth = 3, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round };
                 canvas.DrawPath(path, linePaint);
 
-                // Маркеры точек
                 using var dotFill = new SKPaint { IsAntialias = true, Color = SKColors.White, Style = SKPaintStyle.Fill };
                 using var dotStroke = new SKPaint { IsAntialias = true, Color = lineColor, StrokeWidth = 2, Style = SKPaintStyle.Stroke };
                 using var haloPaint = new SKPaint { IsAntialias = true, Color = lineColor.WithAlpha(60), Style = SKPaintStyle.Fill };
@@ -134,13 +123,11 @@ namespace XzBotCs.Services
                 {
                     var p = points[i];
                     float r = (i == points.Count - 1) ? 5f : 3.5f;
-                    // ореол
                     canvas.DrawCircle(p.X, p.Y, r + 3, haloPaint);
                     canvas.DrawCircle(p.X, p.Y, r, dotFill);
                     canvas.DrawCircle(p.X, p.Y, r, dotStroke);
                 }
 
-                // Подписи X (через равные интервалы, чтобы не налезали)
                 using var xLabelPaint = new SKPaint { Color = SKColors.LightGray, IsAntialias = true };
                 using var xLabelFont = new SKFont(SKTypeface.Default, 12);
                 int maxLabels = Math.Min(sortedStats.Count, 7);
@@ -163,9 +150,6 @@ namespace XzBotCs.Services
                 return CreatePlaceholderImage("Ошибка");
             }
         }
-// ... остальной код (методы IncrementUsage, RecordResponseTime и т.д.)
-// (Мне нужно вставить весь класс целиком, чтобы не терять методы. Но я могу просто добавить метод.)
-
 
         public void IncrementUsage()
         {
@@ -201,6 +185,28 @@ namespace XzBotCs.Services
             }
         }
 
+        /// <summary>Запись времени ответа конкретного провайдера (bing/ddg). Держим последние 1000 замеров на провайдера.</summary>
+        public void RecordResponseTime(string providerKey, TimeSpan elapsed)
+        {
+            if (string.IsNullOrWhiteSpace(providerKey)) return;
+            string key = providerKey.Trim().ToLowerInvariant();
+
+            lock (_state.SyncRoot)
+            {
+                if (!_state.ResponseTimesByProvider.TryGetValue(key, out var list))
+                {
+                    list = new List<double>();
+                    _state.ResponseTimesByProvider[key] = list;
+                }
+
+                list.Add(Math.Round(elapsed.TotalMilliseconds, 1));
+                if (list.Count > 1000)
+                {
+                    list.RemoveRange(0, list.Count - 1000);
+                }
+            }
+        }
+
         public void RecordError(string errorType)
         {
             lock (_state.SyncRoot)
@@ -223,34 +229,73 @@ namespace XzBotCs.Services
                     Success = success
                 });
 
-                if (_state.RecentRequests.Count > 200) // Храним больше записей для статистики
+                if (_state.RecentRequests.Count > 200)
                 {
                     _state.RecentRequests.RemoveRange(200, _state.RecentRequests.Count - 200);
                 }
 
-                // Обновляем агрегированную статистику
                 UpdateStatsFromRecent();
-                _state.Save();
+
+                if (_state.PopularQueries.Count > 50)
+                {
+                    var top = _state.PopularQueries
+                        .OrderByDescending(kv => kv.Value)
+                        .Take(50)
+                        .ToDictionary(kv => kv.Key, kv => kv.Value);
+                    _state.PopularQueries.Clear();
+                    foreach (var kv in top) _state.PopularQueries[kv.Key] = kv.Value;
+                }
             }
+
+            ScheduleSave();
         }
 
-        public string BuildStatsText(bool bingOk, string bingStatus)
+        private static readonly object _saveLock = new object();
+        private static DateTime _lastSaveUtc = DateTime.MinValue;
+        private static readonly TimeSpan SaveInterval = TimeSpan.FromSeconds(15);
+
+        /// <summary>
+        /// Сохраняет состояние не чаще раза в <see cref="SaveInterval"/>.
+        /// При остановке бота Main вызывает _state.Save(), так что данные не теряются.
+        /// </summary>
+        private void ScheduleSave()
+        {
+            lock (_saveLock)
+            {
+                if (DateTime.UtcNow - _lastSaveUtc < SaveInterval)
+                {
+                    return;
+                }
+
+                _lastSaveUtc = DateTime.UtcNow;
+            }
+
+            _state.Save();
+        }
+
+        public string BuildStatsText(IEnumerable<(string Key, string DisplayName, bool Ok, string Status)> providerStatuses)
         {
             var uptime = DateTime.Now - _state.StartedAt;
             string uptimeStr = FormatUptime(uptime);
             string startedAt = _state.StartedAt.ToString("dd.MM.yyyy HH:mm:ss");
-            string bingIcon = bingOk ? "✅" : "❌";
             int successCount = Math.Max(0, _state.UsageCount - _state.ErrorCount);
             double successRate = _state.UsageCount > 0
                 ? Math.Round(successCount / (double)_state.UsageCount * 100, 1)
                 : 100.0;
 
+            var servicesLines = new System.Text.StringBuilder();
+            foreach (var p in providerStatuses)
+            {
+                string icon = p.Ok ? "✅" : "❌";
+                servicesLines.Append($"  {Escape(p.DisplayName)}: {icon} `{Escape(p.Status)}`\n");
+            }
+
             return "📊 *Статистика бота*\n\n" +
                    "⏱ *Аптайм*\n" +
                    $"  `{Escape(uptimeStr)}` \\(с `{Escape(startedAt)}`\\)\n\n" +
                    "🌐 *Внешние сервисы*\n" +
-                   $"  Bing: {bingIcon} `{Escape(bingStatus)}`\n\n" +
-                   "📈 *Запросы*\n" +
+                   servicesLines +
+                   "\n📈 *Запросы*\n" +
                    $"  Всего: `{_state.UsageCount}`\n" +
                    $"  Успешных: `{successCount}` \\({Escape(successRate.ToString())}%\\)\n" +
                    $"  Ошибок: `{_state.ErrorCount}`\n\n" +
@@ -258,61 +303,73 @@ namespace XzBotCs.Services
         }
 
         public string BuildMetricsText()
-        {
-            var uptime = DateTime.Now - _state.StartedAt;
-            double requestsPerMinute = uptime.TotalSeconds > 0
-                ? Math.Round(_state.UsageCount / (uptime.TotalSeconds / 60), 2)
-                : 0;
-
-            var lines = new List<string>
-            {
-                "📈 *Метрики производительности*",
-                ""
-            };
-
-            if (_state.ResponseTimesMs.Count > 0)
-            {
-                lines.Add("⏱ *Время ответа Bing*");
-                lines.Add($"  среднее:  `{Escape(Math.Round(_state.ResponseTimesMs.Average(), 1).ToString())} мс`");
-                lines.Add($"  мин:      `{Escape(_state.ResponseTimesMs.Min().ToString())} мс`");
-                lines.Add($"  макс:     `{Escape(_state.ResponseTimesMs.Max().ToString())} мс`");
-                lines.Add($"  замеров:  `{_state.ResponseTimesMs.Count}`");
-            }
-            else
-            {
-                lines.Add("⏱ *Время ответа Bing:* нет данных");
-            }
-
-            lines.Add("");
-            lines.Add($"🔢 *Нагрузка:* `{Escape(requestsPerMinute.ToString())}` зап/мин");
-            lines.Add("");
-
-            if (_state.ErrorDetails.Count > 0)
-            {
-                lines.Add("⚠️ *Ошибки по типам:*");
-                foreach (var item in _state.ErrorDetails.OrderByDescending(x => x.Value))
                 {
-                    lines.Add($"  `{Escape(item.Key)}` — `{item.Value}`");
-                }
-            }
-            else
-            {
-                lines.Add("✅ *Ошибок не зафиксировано*");
-            }
+                    var uptime = DateTime.Now - _state.StartedAt;
+                    double requestsPerMinute = uptime.TotalSeconds > 0
+                        ? Math.Round(_state.UsageCount / (uptime.TotalSeconds / 60), 2)
+                        : 0;
 
-            return string.Join("\n", lines);
-        }
+                    var lines = new List<string>
+                    {
+                        "📈 *Метрики производительности*",
+                        ""
+                    };
+
+                    // Время ответа отдельным блоком для каждого провайдера (Bing, DuckDuckGo).
+                    // Показываем оба всегда, даже если замеров ещё нет.
+                    string[] providerOrder = { "bing", "ddg" };
+                    foreach (var providerKey in providerOrder)
+                    {
+                        string providerName = providerKey == "ddg" ? "DuckDuckGo" : "Bing";
+
+                        List<double> times;
+                        lock (_state.SyncRoot)
+                        {
+                            _state.ResponseTimesByProvider.TryGetValue(providerKey, out times!);
+                        }
+
+                        if (times == null || times.Count == 0)
+                        {
+                            lines.Add($"⏱ *Время ответа {providerName}:* нет данных");
+                            lines.Add("");
+                            continue;
+                        }
+
+                        lines.Add($"⏱ *Время ответа {providerName}*");
+                        lines.Add($"  среднее:  `{Escape(Math.Round(times.Average(), 1).ToString())} мс`");
+                        lines.Add($"  мин:      `{Escape(times.Min().ToString())} мс`");
+                        lines.Add($"  макс:     `{Escape(times.Max().ToString())} мс`");
+                        lines.Add($"  замеров:  `{times.Count}`");
+                        lines.Add("");
+                    }
+
+                    lines.Add($"🔢 *Нагрузка:* `{Escape(requestsPerMinute.ToString())}` зап/мин");
+                    lines.Add("");
+
+                    if (_state.ErrorDetails.Count > 0)
+                    {
+                        lines.Add("⚠️ *Ошибки по типам:*");
+                        foreach (var item in _state.ErrorDetails.OrderByDescending(x => x.Value))
+                        {
+                            lines.Add($"  `{Escape(item.Key)}` — `{item.Value}`");
+                        }
+                    }
+                    else
+                    {
+                        lines.Add("✅ *Ошибок не зафиксировано*");
+                    }
+
+                    return string.Join("\n", lines);
+                }
 
         public string BuildDashboardText(long userId, int? page = null, string? filter = null, string? search = null)
         {
-            // Получаем состояние пользователя или создаем новое
             if (!_state.DashboardStates.ContainsKey(userId))
             {
                 _state.DashboardStates[userId] = new DashboardState();
             }
             var state = _state.DashboardStates[userId];
 
-            // Если переданы параметры, обновляем состояние
             if (page.HasValue) state.Page = page.Value;
             if (filter != null) state.Filter = filter;
             if (search != null) state.Search = search;
@@ -323,14 +380,12 @@ namespace XzBotCs.Services
                 ""
             };
 
-            // Статистика сверху
             var today = DateTime.Today;
             var todayRequests = _state.RecentRequests.Where(r => r.Time.Date == today).ToList();
             int todayTotal = todayRequests.Count;
             int todaySuccess = todayRequests.Count(r => r.Success);
             int todayErrors = todayRequests.Count(r => !r.Success);
 
-            // Топ-5 запросов за сегодня
             var topQueries = todayRequests
                 .GroupBy(r => r.Query)
                 .Select(g => new { Query = g.Key, Count = g.Count() })
@@ -346,7 +401,6 @@ namespace XzBotCs.Services
             }
             lines.Add("");
 
-            // Фильтрация
             var filtered = _state.RecentRequests.AsEnumerable();
             if (state.Filter == "success")
                 filtered = filtered.Where(r => r.Success);
@@ -367,7 +421,6 @@ namespace XzBotCs.Services
                 return string.Join("\n", lines);
             }
 
-            // Пагинация
             int pageSize = 10;
             int totalPages = (int)Math.Ceiling(list.Count / (double)pageSize);
             if (state.Page >= totalPages) state.Page = totalPages - 1;
@@ -399,14 +452,12 @@ namespace XzBotCs.Services
 
             var buttons = new List<List<InlineKeyboardButton>>();
 
-            // Кнопки пагинации
             var navButtons = new List<InlineKeyboardButton>();
             navButtons.Add(InlineKeyboardButton.WithCallbackData("◀️ Назад", $"dash:page:{state.Page - 1}"));
             navButtons.Add(InlineKeyboardButton.WithCallbackData($"{state.Page + 1}", $"dash:page:{state.Page}"));
             navButtons.Add(InlineKeyboardButton.WithCallbackData("Вперед ▶️", $"dash:page:{state.Page + 1}"));
             buttons.Add(navButtons);
 
-            // Фильтры
             var filterButtons = new List<InlineKeyboardButton>();
             string allLabel = state.Filter == "all" || state.Filter == null ? "✅ Все" : "Все";
             string successLabel = state.Filter == "success" ? "✅ Успешные" : "Успешные";
@@ -416,12 +467,11 @@ namespace XzBotCs.Services
             filterButtons.Add(InlineKeyboardButton.WithCallbackData(errorsLabel, "dash:filter:errors"));
             buttons.Add(filterButtons);
 
-            // Дополнительные кнопки
             var extraButtons = new List<InlineKeyboardButton>();
             extraButtons.Add(InlineKeyboardButton.WithCallbackData("🔄 Обновить", "dash:refresh"));
             if (!string.IsNullOrEmpty(state.Search))
             {
-                extraButtons.Add(InlineKeyboardButton.WithCallbackData($"🔍 Сброс поиска", "dash:search:clear"));
+                extraButtons.Add(InlineKeyboardButton.WithCallbackData("🔍 Сброс поиска", "dash:search:clear"));
             }
             else
             {
@@ -442,14 +492,12 @@ namespace XzBotCs.Services
 
         private void UpdateStatsFromRecent()
         {
-            // Обновляем TodayRequests, TodaySuccess, TodayErrors
             var today = DateTime.Today;
             var todayRequests = _state.RecentRequests.Where(r => r.Time.Date == today).ToList();
             _state.TodayRequests = todayRequests.Count;
             _state.TodaySuccess = todayRequests.Count(r => r.Success);
             _state.TodayErrors = todayRequests.Count(r => !r.Success);
 
-            // Обновляем PopularQueries (за все время, топ-20)
             var allQueries = _state.RecentRequests
                 .GroupBy(r => r.Query)
                 .Select(g => new { Query = g.Key, Count = g.Count() })
