@@ -29,6 +29,9 @@ namespace XzBotCs
                 private static ISearchService _searchService = new RoutingSearchService(_searchRegistry);
                 private static WatermarkService _watermarkService = new WatermarkService();
         private static BotStatsService _statsService = new BotStatsService(_state);
+        private static Commands.BroadcastService _broadcastService = null!;
+        private static Services.StatsMessageService _statsMessageService = null!;
+        private static Handlers.CallbackQueryHandler _callbackQueryHandler = null!;
         private static PrefStore _prefs = PrefStore.Load();
         private static HttpClient _httpClient = new HttpClient();
         private static readonly HashSet<long> _adminIds = new HashSet<long>();
@@ -43,13 +46,6 @@ namespace XzBotCs
         private const int DefaultProxyPort = 8080;
         private const string DefaultProxyBaseUrl = "http://46.229.63.243:8080/img?u=";
         private const string DeveloperProfileUrl = "https://t.me/Tyta_Zdesyaa777";
-        private const string CallbackDashPage = "dash:page:";
-        private const string CallbackDashFilter = "dash:filter:";
-        private const string CallbackDashSort = "dash:sort:";
-        private const string CallbackDashSearch = "dash:search";
-        private const string CallbackDashRefresh = "dash:refresh";
-        private const string CallbackDashClearSearch = "dash:clear_search";
-        private const string CallbackDashNoop = "dash:noop";
 
         static async Task Main(string[] args)
         {
@@ -94,10 +90,13 @@ namespace XzBotCs
             if (long.TryParse(cacheChatIdStr, out long cid)) _cacheChatId = cid;
             else _cacheChatId = _adminIds.Count > 0 ? _adminIds.First() : null;
             int proxyPort = int.TryParse(proxyPortStr, out int parsedProxyPort) ? parsedProxyPort : DefaultProxyPort;
-            _proxyBaseUrl = NormalizeProxyBaseUrl(proxyBaseUrl ?? DefaultProxyBaseUrl);
+            _proxyBaseUrl = UserInputHelper.NormalizeProxyBaseUrl(proxyBaseUrl ?? DefaultProxyBaseUrl);
             SetupLogging();
 
             _botClient = new TelegramBotClient(token);
+            _broadcastService = new Commands.BroadcastService(_botClient, _state, _searchService, _statsService, _httpClient);
+            _statsMessageService = new Services.StatsMessageService(_botClient, _searchRegistry, _statsService, _state);
+            _callbackQueryHandler = new Handlers.CallbackQueryHandler(_botClient, _state, _searchRegistry, _statsService, _statsMessageService, _adminIds);
 
             using var cts = new CancellationTokenSource();
 
@@ -140,16 +139,6 @@ namespace XzBotCs
             catch (OperationCanceledException) { }
 
             _state.Save();
-        }
-
-        private static bool TryParseFlag(ref string query, string flag)
-        {
-            var pattern = $@"(^|\s){System.Text.RegularExpressions.Regex.Escape(flag)}(\s|$)";
-            var match = System.Text.RegularExpressions.Regex.Match(query, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase, FlagRegexTimeout);
-            if (!match.Success) return false;
-
-            query = System.Text.RegularExpressions.Regex.Replace(query, pattern, " ", System.Text.RegularExpressions.RegexOptions.IgnoreCase, FlagRegexTimeout).Trim();
-            return true;
         }
 
         private static string ReadEnvValue(string line, string key)
@@ -414,7 +403,7 @@ namespace XzBotCs
                         }
 
                         string arg = messageText.Substring(cmdPrefix.Length).Trim();
-                        long newAdminId = ExtractUserId(arg);
+                        long newAdminId = UserInputHelper.ExtractUserId(arg);
                         if (newAdminId == 0)
                         {
                             await botClient.SendMessage(
@@ -464,7 +453,7 @@ namespace XzBotCs
                         }
 
                         string arg = messageText.Substring(cmdPrefix.Length).Trim();
-                        long removeAdminId = ExtractUserId(arg);
+                        long removeAdminId = UserInputHelper.ExtractUserId(arg);
                         if (removeAdminId == 0)
                         {
                             await botClient.SendMessage(
@@ -525,7 +514,7 @@ namespace XzBotCs
                         }
 
                         var parts = arg.Split(new[] { ' ', '\t' }, 2, StringSplitOptions.RemoveEmptyEntries);
-                        long targetId = ExtractUserId(parts[0]);
+                        long targetId = UserInputHelper.ExtractUserId(parts[0]);
                         if (targetId == 0)
                         {
                             await botClient.SendMessage(
@@ -649,133 +638,7 @@ namespace XzBotCs
                 }
                 else if (update.CallbackQuery is { } callbackQuery)
                 {
-                    if (_adminIds.Count == 0 || !_adminIds.Contains(callbackQuery.From.Id))
-                    {
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "⛔ Нет доступа", showAlert: true, cancellationToken: cancellationToken);
-                        return;
-                    }
-
-                    if (callbackQuery.Data == "toggle_wm")
-                    {
-                        _state.IsWatermarkEnabled = !_state.IsWatermarkEnabled;
-                        _state.Save();
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, $"Ватермарка: {(_state.IsWatermarkEnabled ? "ВКЛ" : "ВЫКЛ")}", cancellationToken: cancellationToken);
-                        await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                    }
-                    else if (callbackQuery.Data == "toggle_provider")
-                                        {
-                                            string? next = _searchRegistry.FallbackKey;
-                                            if (next != null && _searchRegistry.SetActive(next))
-                                            {
-                                                await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, $"Провайдер: {_searchRegistry.ActiveKey.ToUpperInvariant()}", cancellationToken: cancellationToken);
-                                            }
-                                            else
-                                            {
-                                                await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Не удалось переключить", showAlert: true, cancellationToken: cancellationToken);
-                                            }
-                                            await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                                        }
-                                        else if (callbackQuery.Data == "stats:refresh")
-                                        {
-                                            await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                                            await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
-                                        }
-                    else if (callbackQuery.Data == "stats:back")
-                    {
-                        await RefreshStatsAsync(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, cancellationToken);
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
-                    }
-                    else if (callbackQuery.Data == "stats:metrics")
-                    {
-                        string text = _statsService.BuildMetricsText();
-                        var markup = new InlineKeyboardMarkup(new[] { 
-                            new [] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") },
-                            new [] { InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:metrics") }
-                        });
-                        try
-                        {
-                            if (callbackQuery.Message is Message { Type: MessageType.Photo } photoMsg)
-                            {
-                                await botClient.EditMessageCaption(photoMsg.Chat.Id, photoMsg.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
-                            }
-                            else
-                            {
-                                await botClient.EditMessageText(callbackQuery.Message!.Chat.Id, callbackQuery.Message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: cancellationToken);
-                            }
-                        }
-                        catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
-                        
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
-                    }
-                    else if (callbackQuery.Data == "stats:dashboard")
-                    {
-                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id);
-                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
-                        // Добавляем кнопку Назад к дашборду
-                        var dashButtons = markup.InlineKeyboard.ToList();
-                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
-                        markup = new InlineKeyboardMarkup(dashButtons);
-                        if (callbackQuery.Message != null)
-                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
-
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
-                    }
-                    else if (callbackQuery.Data != null && callbackQuery.Data.StartsWith(CallbackDashPage))
-                    {
-                        string pageStr = callbackQuery.Data.Substring(CallbackDashPage.Length);
-                        if (int.TryParse(pageStr, out int newPage))
-                        {
-                            string text = _statsService.BuildDashboardText(callbackQuery.From.Id, page: newPage);
-                            var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
-                            var dashButtons = markup.InlineKeyboard.ToList();
-                            dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
-                            markup = new InlineKeyboardMarkup(dashButtons);
-                            if (callbackQuery.Message != null)
-                                await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
-                        }
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
-                    }
-                    else if (callbackQuery.Data != null && callbackQuery.Data.StartsWith(CallbackDashFilter))
-                    {
-                        string filter = callbackQuery.Data.Substring(CallbackDashFilter.Length);
-                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id, page: 0, filter: filter);
-                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
-                        var dashButtons = markup.InlineKeyboard.ToList();
-                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
-                        markup = new InlineKeyboardMarkup(dashButtons);
-                        if (callbackQuery.Message != null)
-                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, cancellationToken: cancellationToken);
-                    }
-                    else if (callbackQuery.Data == CallbackDashRefresh)
-                    {
-                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id);
-                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
-                        var dashButtons = markup.InlineKeyboard.ToList();
-                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
-                        markup = new InlineKeyboardMarkup(dashButtons);
-                        if (callbackQuery.Message != null)
-                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Обновлено ✅", cancellationToken: cancellationToken);
-                    }
-                    else if (callbackQuery.Data == "dash:search:clear")
-                    {
-                        string text = _statsService.BuildDashboardText(callbackQuery.From.Id, page: 0, search: string.Empty);
-                        // Сбрасываем фильтр поиска
-                        if (_state.DashboardStates.TryGetValue(callbackQuery.From.Id, out var ds)) ds.Search = string.Empty;
-                        var markup = _statsService.BuildDashboardMarkup(callbackQuery.From.Id);
-                        var dashButtons = markup.InlineKeyboard.ToList();
-                        dashButtons.Add(new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", "stats:back") });
-                        markup = new InlineKeyboardMarkup(dashButtons);
-                        if (callbackQuery.Message != null)
-                            await EditDashboardWithFallbackAsync(botClient, callbackQuery.Message, text, markup, cancellationToken);
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Поиск сброшен", cancellationToken: cancellationToken);
-                    }
-                    else if (callbackQuery.Data == CallbackDashSearch)
-                    {
-                        _statsService.SetDashboardAwaitingSearch(callbackQuery.From.Id, true);
-                        await TryAnswerCallbackQueryAsync(botClient, callbackQuery.Id, "Отправьте текст для поиска в ЛС бота", showAlert: true, cancellationToken: cancellationToken);
-                    }
+                    await _callbackQueryHandler.HandleAsync(callbackQuery, cancellationToken);
                 }
                 else if (update.InlineQuery is { } inlineQuery)
                 {
@@ -849,7 +712,7 @@ namespace XzBotCs
                         return;
                     }
 
-                    bool isRandom = TryParseFlag(ref query, "--random");
+                    bool isRandom = UserInputHelper.TryParseFlag(ref query, "--random", FlagRegexTimeout);
                                         int offset = int.TryParse(inlineQuery.Offset, out int parsedOffset) ? parsedOffset : 0;
                                         Console.WriteLine($"Inline query from {inlineQuery.From.Id}: '{query}', offset={offset}, random={isRandom}");
                                         _statsService.IncrementUsage();
@@ -980,285 +843,23 @@ namespace XzBotCs
             }
         }
 
-        static async Task SendRandomImageAsync(long chatId, string topic, CancellationToken ct)
-        {
-            await _botClient!.SendChatAction(chatId, ChatAction.UploadPhoto, cancellationToken: ct);
+        static Task SendRandomImageAsync(long chatId, string topic, CancellationToken ct)
+            => _broadcastService.SendRandomImageAsync(chatId, topic, ct);
 
-            int limit = _state.IsWatermarkEnabled ? 6 : 30;
-            var response = await _searchService.SearchImagesDetailedAsync(topic, startIndex: 1, limit: limit);
-            var items = response.Items;
-            if (items.Count == 0)
-            {
-                await _botClient.SendMessage(
-                    chatId,
-                    "😕 Ничего не нашлось по запросу\\. Попробуй другую тему\\.",
-                    parseMode: ParseMode.MarkdownV2,
-                    cancellationToken: ct);
-                return;
-            }
+        static Task SendBroadcastAsync(long adminChatId, string announcement, CancellationToken ct)
+            => _broadcastService.SendBroadcastAsync(adminChatId, announcement, ct);
 
-            _statsService.RecordRequest(0, null, topic + " --random", true);
-            _state.Save();
+        static Task SendStatsAsync(long chatId, CancellationToken ct)
+            => _statsMessageService.SendStatsAsync(chatId, ct);
 
-            // Перемешиваем список элементов, чтобы совершать попытки отправки по случайному порядку
-            var shuffledItems = items.OrderBy(_ => Random.Shared.Next()).ToList();
-            bool sent = false;
-
-            foreach (var pick in shuffledItems)
-            {
-                var markup = BuildSourceMarkup(pick);
-                var caption = $"🎲 *{TelegramEscaper.EscapeMarkdownV2(topic)}*";
-
-                try
-                {
-                    if (pick.IsGif)
-                    {
-                        await _botClient.SendAnimation(
-                            chatId,
-                            InputFile.FromUri(pick.Url),
-                            caption: caption,
-                            parseMode: ParseMode.MarkdownV2,
-                            replyMarkup: markup,
-                            cancellationToken: ct);
-                    }
-                    else
-                    {
-                        await _botClient.SendPhoto(
-                            chatId,
-                            InputFile.FromUri(pick.Url),
-                            caption: caption,
-                            parseMode: ParseMode.MarkdownV2,
-                            replyMarkup: markup,
-                            cancellationToken: ct);
-                    }
-                    sent = true;
-                    break;
-                }
-                catch (ApiRequestException ex) when (ex.Message.Contains("failed to get HTTP URL content") || ex.ErrorCode == 400)
-                {
-                    // Ошибка получения контента по URL со стороны Telegram. Пробуем скачать локально и отправить потоком.
-                    try
-                    {
-                        using var httpResp = await _httpClient.GetAsync(pick.Url, HttpCompletionOption.ResponseHeadersRead, ct);
-                        if (httpResp.IsSuccessStatusCode)
-                        {
-                            await using var stream = await httpResp.Content.ReadAsStreamAsync(ct);
-                            var filename = pick.IsGif ? "animation.gif" : "photo.jpg";
-                            var inputFile = InputFile.FromStream(stream, filename);
-
-                            if (pick.IsGif)
-                            {
-                                await _botClient.SendAnimation(
-                                    chatId,
-                                    inputFile,
-                                    caption: caption,
-                                    parseMode: ParseMode.MarkdownV2,
-                                    replyMarkup: markup,
-                                    cancellationToken: ct);
-                            }
-                            else
-                            {
-                                await _botClient.SendPhoto(
-                                    chatId,
-                                    inputFile,
-                                    caption: caption,
-                                    parseMode: ParseMode.MarkdownV2,
-                                    replyMarkup: markup,
-                                    cancellationToken: ct);
-                            }
-                            sent = true;
-                            break;
-                        }
-                    }
-                    catch
-                    {
-                        // Пропускаем проблемную ссылку и пробуем следующий картинку
-                    }
-                }
-                catch
-                {
-                    // При иных ошибках отправки пробуем следующий найденный объект
-                }
-            }
-
-            if (!sent)
-            {
-                await _botClient.SendMessage(
-                    chatId,
-                    "😕 Не удалось загрузить ни одно изображение по вашему запросу\\. Попробуйте другую тему\\.",
-                    parseMode: ParseMode.MarkdownV2,
-                    cancellationToken: ct);
-            }
-        }
-
-        static async Task SendBroadcastAsync(long adminChatId, string announcement, CancellationToken ct)
-        {
-            List<long> subscribers;
-            lock (_state.SyncRoot)
-            {
-                subscribers = _state.Subscribers.ToList();
-            }
-            if (subscribers.Count == 0)
-            {
-                await _botClient!.SendMessage(adminChatId, "📭 Список подписчиков пуст.", cancellationToken: ct);
-                return;
-            }
-
-            await _botClient!.SendMessage(
-                adminChatId,
-                $"🚀 Начинаю рассылку для `{subscribers.Count}` подписчиков\\.\\.\\.",
-                parseMode: ParseMode.MarkdownV2,
-                cancellationToken: ct);
-
-            int success = 0;
-            int failed = 0;
-            var failedIds = new List<long>();
-
-            foreach (var userId in subscribers)
-            {
-                try
-                {
-                    await _botClient!.SendMessage(
-                        userId,
-                        "📢 *Обновление*\n\n" + announcement,
-                        parseMode: ParseMode.Markdown,
-                        cancellationToken: ct);
-                    success++;
-                }
-                catch (ApiRequestException ex) when (ex.ErrorCode == 403)
-                {
-                    failed++;
-                    lock (_state.SyncRoot)
-                    {
-                        _state.Subscribers.Remove(userId);
-                    }
-                    failedIds.Add(userId);
-                    Console.WriteLine($"Broadcast: user {userId} blocked the bot, removed from subscribers.");
-                }
-                catch (Exception ex)
-                {
-                    failed++;
-                    Console.WriteLine($"Broadcast: failed to send to {userId}: {ex.Message}");
-                }
-
-                await Task.Delay(50, ct);
-            }
-
-            if (failedIds.Count > 0)
-            {
-                _state.Save();
-            }
-
-            await _botClient!.SendMessage(
-                adminChatId,
-                $"✅ Рассылка завершена\\.\n\n" +
-                $"📨 Отправлено: `{success}`\n" +
-                $"❌ Не удалось: `{failed}`",
-                parseMode: ParseMode.MarkdownV2,
-                cancellationToken: ct);
-        }
-
-        static async Task SendStatsAsync(long chatId, CancellationToken ct)
-                {
-                    var providerStatuses = await _searchRegistry.CheckAllAsync();
-                    var text = _statsService.BuildStatsText(providerStatuses);
-                    var markup = BuildStatsMarkup();
-            
-            var chartBytes = _statsService.GenerateChartImage();
-            if (chartBytes.Length > 0)
-            {
-                using var ms = new MemoryStream(chartBytes);
-                await _botClient!.SendPhoto(chatId, InputFile.FromStream(ms, "stats.png"), caption: text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-            }
-            else
-            {
-                await _botClient!.SendMessage(chatId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-            }
-        }
-
-        static async Task RefreshStatsAsync(long chatId, int messageId, CancellationToken ct)
-                {
-                    var providerStatuses = await _searchRegistry.CheckAllAsync();
-                    var text = _statsService.BuildStatsText(providerStatuses);
-                    var markup = BuildStatsMarkup();
-            try
-            {
-                var chartBytes = _statsService.GenerateChartImage();
-                if (chartBytes.Length > 0)
-                {
-                    using var ms = new MemoryStream(chartBytes);
-                    await _botClient!.EditMessageMedia(chatId, messageId, new InputMediaPhoto(InputFile.FromStream(ms, "stats.png")), cancellationToken: ct);
-                    await _botClient!.EditMessageCaption(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-                }
-                else
-                {
-                    try
-                    {
-                        await _botClient!.EditMessageText(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-                    }
-                    catch (ApiRequestException ex) when (ex.Message.Contains("there is no text in the message to edit"))
-                    {
-                        await _botClient!.EditMessageCaption(chatId, messageId, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-                    }
-                }
-            }
-            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
-            catch { }
-        }
+        static Task RefreshStatsAsync(long chatId, int messageId, CancellationToken ct)
+            => _statsMessageService.RefreshStatsAsync(chatId, messageId, ct);
 
         static InlineKeyboardMarkup BuildStatsMarkup()
-        {
-            string wmBtnText = _state.IsWatermarkEnabled ? "❌ Выключить ватермарку" : "✅ Включить ватермарку";
-                        string providerLabel = _searchRegistry.ActiveKey == SearchProviderRegistry.DuckDuckGoKey ? "🔎 DDG" : "🔎 Bing";
-                        return new InlineKeyboardMarkup(new[]
-                        {
-                            new [] { InlineKeyboardButton.WithCallbackData("📈 Метрики", "stats:metrics"), InlineKeyboardButton.WithCallbackData("📋 Дашборд", "stats:dashboard") },
-                            new [] { InlineKeyboardButton.WithCallbackData(wmBtnText, "toggle_wm") },
-                            new [] { InlineKeyboardButton.WithCallbackData(providerLabel, "toggle_provider"), InlineKeyboardButton.WithCallbackData("🔄 Обновить", "stats:refresh") }
-                        });
-        }
+            => TelegramUiHelper.BuildStatsMarkup(_state.IsWatermarkEnabled, _searchRegistry.ActiveKey);
 
-        private static async Task EditDashboardWithFallbackAsync(ITelegramBotClient botClient, Message message, string text, InlineKeyboardMarkup markup, CancellationToken ct)
-        {
-            try
-            {
-                if (message is { Type: MessageType.Photo })
-                {
-                    await botClient.EditMessageCaption(message.Chat.Id, message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-                }
-                else
-                {
-                    await botClient.EditMessageText(message.Chat.Id, message.Id, text, parseMode: ParseMode.MarkdownV2, replyMarkup: markup, cancellationToken: ct);
-                }
-            }
-            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("can't parse entities"))
-            {
-                Console.WriteLine($"Dashboard markdown parse failed, fallback to plain: {ex.Message}");
-                Console.WriteLine($"Text was: {text}");
-                try
-                {
-                    if (message is { Type: MessageType.Photo })
-                        await botClient.EditMessageCaption(message.Chat.Id, message.Id, text, replyMarkup: markup, cancellationToken: ct);
-                    else
-                        await botClient.EditMessageText(message.Chat.Id, message.Id, text, replyMarkup: markup, cancellationToken: ct);
-                }
-                catch (Exception ex2)
-                {
-                    Console.WriteLine($"Fallback also failed: {ex2.Message}");
-                }
-            }
-            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified")) { }
-        }
-
-        private static string? NormalizeProxyBaseUrl(string? proxyBaseUrl)
-        {
-            if (string.IsNullOrWhiteSpace(proxyBaseUrl)) return null;
-
-            proxyBaseUrl = proxyBaseUrl.Trim();
-            return proxyBaseUrl.Contains("?u=", StringComparison.OrdinalIgnoreCase)
-                ? proxyBaseUrl
-                : $"{proxyBaseUrl.TrimEnd('/')}/img?u=";
-        }
+        private static Task EditDashboardWithFallbackAsync(ITelegramBotClient botClient, Message message, string text, InlineKeyboardMarkup markup, CancellationToken ct)
+            => TelegramUiHelper.EditDashboardWithFallbackAsync(botClient, message, text, markup, ct);
 
         private static string BuildProxyImageUrl(string imageUrl)
         {
@@ -1357,12 +958,7 @@ namespace XzBotCs
         }
 
         private static InlineQueryResultsButton BuildDeveloperInlineButton()
-        {
-            return new InlineQueryResultsButton("💻 Профиль разработчика >")
-            {
-                StartParameter = "developer"
-            };
-        }
+            => TelegramUiHelper.BuildDeveloperInlineButton();
 
         private static async Task<string?> TryGetUsernameAsync(ITelegramBotClient botClient, long userId, CancellationToken cancellationToken)
         {
@@ -1377,73 +973,13 @@ namespace XzBotCs
             }
         }
 
-        private static long ExtractUserId(string input)
-        {
-            if (string.IsNullOrWhiteSpace(input)) return 0;
+        private static Task AnswerRegistrationRequired(ITelegramBotClient botClient, string inlineQueryId, CancellationToken cancellationToken)
+            => TelegramUiHelper.AnswerRegistrationRequiredAsync(botClient, inlineQueryId, _botUsername, _statsService, cancellationToken);
 
-            input = input.Trim();
+        private static Task AnswerEmptyInlineQuery(ITelegramBotClient botClient, string inlineQueryId, CancellationToken cancellationToken)
+            => TelegramUiHelper.AnswerEmptyInlineQueryAsync(botClient, inlineQueryId, _statsService, cancellationToken);
 
-            if (long.TryParse(input, out long directId)) return directId;
-
-            const string marker = "user?id=";
-            int index = input.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (index >= 0)
-            {
-                string idStr = input.Substring(index + marker.Length);
-                int end = idStr.IndexOfAny(new[] { '&', '?', ' ', '\t' });
-                if (end >= 0) idStr = idStr.Substring(0, end);
-                if (long.TryParse(idStr, out long tgId)) return tgId;
-            }
-
-            return 0;
-        }
-
-        private static async Task AnswerRegistrationRequired(ITelegramBotClient botClient, string inlineQueryId, CancellationToken cancellationToken)
-        {
-            string? botUrl = string.IsNullOrEmpty(_botUsername)
-                ? null
-                : $"https://t.me/{_botUsername}?start=register";
-
-            var result = new InlineQueryResultArticle(
-                "register-required",
-                "🔒 Подтвердите регистрацию",
-                new InputTextMessageContent("Для использования бота откройте личные сообщения и подтвердите регистрацию."))
-            {
-                Description = "Нажмите, чтобы перейти в ЛС с ботом",
-                ReplyMarkup = botUrl == null
-                    ? null
-                    : new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("✅ Перейти в ЛС", botUrl))
-            };
-
-            await TryAnswerInlineQueryAsync(
-                botClient,
-                inlineQueryId,
-                new[] { result },
-                cacheTime: 0,
-                isPersonal: true,
-                cancellationToken: cancellationToken);
-        }
-
-        private static async Task AnswerEmptyInlineQuery(ITelegramBotClient botClient, string inlineQueryId, CancellationToken cancellationToken)
-        {
-            var emptyResult = new InlineQueryResultArticle(
-                "empty-query",
-                "🔍 Введите запрос",
-                new InputTextMessageContent("Введите запрос после имени бота, и я найду картинки."))
-            {
-                Description = "Напишите, какую картинку найти. Например: кот в очках"
-            };
-
-            await TryAnswerInlineQueryAsync(
-                botClient,
-                inlineQueryId,
-                new[] { emptyResult },
-                cacheTime: 0,
-                isPersonal: true,
-                cancellationToken: cancellationToken);
-        }
-
-        private static async Task<bool> TryAnswerInlineQueryAsync(
+        private static Task<bool> TryAnswerInlineQueryAsync(
             ITelegramBotClient botClient,
             string inlineQueryId,
             IEnumerable<InlineQueryResult> results,
@@ -1451,73 +987,18 @@ namespace XzBotCs
             bool isPersonal,
             string nextOffset = "",
             CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                await botClient.AnswerInlineQuery(
-                    inlineQueryId,
-                    results,
-                    cacheTime: cacheTime,
-                    isPersonal: isPersonal,
-                    nextOffset: nextOffset,
-                    button: BuildDeveloperInlineButton(),
-                    cancellationToken: cancellationToken);
-                return true;
-            }
-            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && (
-                ex.Message.Contains("query is too old", StringComparison.OrdinalIgnoreCase) ||
-                ex.Message.Contains("query expired", StringComparison.OrdinalIgnoreCase) ||
-                ex.Message.Contains("query ID is invalid", StringComparison.OrdinalIgnoreCase)))
-            {
-                _statsService.RecordError("inline_timeout");
-                Console.WriteLine($"Inline answer skipped: Telegram query expired ({ex.Message})");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error answering inline query: {ex.Message}");
-                return false;
-            }
-        }
+            => TelegramUiHelper.TryAnswerInlineQueryAsync(botClient, inlineQueryId, results, cacheTime, isPersonal, _statsService, nextOffset, cancellationToken);
 
-        private static async Task<bool> TryAnswerCallbackQueryAsync(
+        private static Task<bool> TryAnswerCallbackQueryAsync(
             ITelegramBotClient botClient,
             string callbackQueryId,
             string? text = null,
             bool showAlert = false,
             CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                await botClient.AnswerCallbackQuery(callbackQueryId, text, showAlert, cancellationToken: cancellationToken);
-                return true;
-            }
-            catch (ApiRequestException ex) when (ex.ErrorCode == 400 && (
-                ex.Message.Contains("query is too old", StringComparison.OrdinalIgnoreCase) ||
-                ex.Message.Contains("query expired", StringComparison.OrdinalIgnoreCase) ||
-                ex.Message.Contains("query ID is invalid", StringComparison.OrdinalIgnoreCase)))
-            {
-                Console.WriteLine($"Callback answer skipped: Telegram query expired ({ex.Message})");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error answering callback query: {ex.Message}");
-                return false;
-            }
-        }
+            => TelegramUiHelper.TryAnswerCallbackQueryAsync(botClient, callbackQueryId, text, showAlert, cancellationToken);
 
         private static InlineKeyboardMarkup BuildSourceMarkup(BingImageResult item)
-        {
-            string sourceUrl = item.SourceUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                ? item.SourceUrl
-                : item.Url;
-            string buttonText = item.SourceUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                ? "🌐 Перейти на сайт"
-                : "🖼 Открыть оригинал";
-
-            return new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl(buttonText, sourceUrl));
-        }
+            => TelegramUiHelper.BuildSourceMarkup(item);
 
         static async Task StartProxyAsync(int port, CancellationToken ct)
         {
