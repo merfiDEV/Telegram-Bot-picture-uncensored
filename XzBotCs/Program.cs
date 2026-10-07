@@ -14,6 +14,7 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.InlineQueryResults;
 using Telegram.Bot.Types.ReplyMarkups;
+using XzBotCs.Helpers;
 using XzBotCs.Interfaces;
 using XzBotCs.Models;
 using XzBotCs.Services;
@@ -139,11 +140,6 @@ namespace XzBotCs
             catch (OperationCanceledException) { }
 
             _state.Save();
-        }
-
-        private static string Escape(string text)
-        {
-            return text.Replace("\\", "\\\\").Replace("_", "\\_").Replace("*", "\\*").Replace("[", "\\[").Replace("]", "\\]").Replace("(", "\\(").Replace(")", "\\)").Replace("~", "\\~").Replace("`", "\\`").Replace(">", "\\>").Replace("#", "\\#").Replace("+", "\\+").Replace("-", "\\-").Replace("=", "\\=").Replace("|", "\\|").Replace("{", "\\{").Replace("}", "\\}").Replace(".", "\\.").Replace("!", "\\!");
         }
 
         private static bool TryParseFlag(ref string query, string flag)
@@ -356,7 +352,7 @@ namespace XzBotCs
                         }
                         catch (Exception ex)
                         {
-                            await botClient.SendMessage(message.Chat.Id, $"Ошибка при сборе логов: {Escape(ex.Message)}", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
+                            await botClient.SendMessage(message.Chat.Id, $"Ошибка при сборе логов: {TelegramEscaper.EscapeMarkdownV2(ex.Message)}", parseMode: ParseMode.MarkdownV2, cancellationToken: cancellationToken);
                         }
                         finally
                         {
@@ -398,7 +394,7 @@ namespace XzBotCs
 
                         await botClient.SendMessage(
                             message.Chat.Id,
-                            $"✅ Текст водяного знака изменен на: `{Escape(newWatermark)}`\\.\nКэш старых ватермарок в Telegram очищен\\.",
+                            $"✅ Текст водяного знака изменен на: `{TelegramEscaper.EscapeMarkdownV2(newWatermark)}`\\.\nКэш старых ватермарок в Telegram очищен\\.",
                             parseMode: ParseMode.MarkdownV2,
                             cancellationToken: cancellationToken);
                     }
@@ -560,7 +556,7 @@ namespace XzBotCs
                             $"ID: `{targetId}`\n" +
                             (string.IsNullOrEmpty(prefix)
                                 ? "Префикс снят\\."
-                                : $"Префикс: {Escape(prefix)}");
+                                : $"Префикс: {TelegramEscaper.EscapeMarkdownV2(prefix)}");
 
                         await botClient.SendMessage(
                             message.Chat.Id,
@@ -590,8 +586,8 @@ namespace XzBotCs
                             string? username = await TryGetUsernameAsync(botClient, adminId, cancellationToken);
                             string display = string.IsNullOrEmpty(username) ? "без username" : $"@{username}";
                             _prefs.Prefixes.TryGetValue(adminId, out string? pref);
-                            string prefix = string.IsNullOrEmpty(pref) ? "" : $"{Escape(pref)} — ";
-                            lines.Add($"{prefix}{Escape(display)} — `{adminId}`");
+                            string prefix = string.IsNullOrEmpty(pref) ? "" : $"{TelegramEscaper.EscapeMarkdownV2(pref)} — ";
+                            lines.Add($"{prefix}{TelegramEscaper.EscapeMarkdownV2(display)} — `{adminId}`");
                         }
 
                         await botClient.SendMessage(
@@ -872,28 +868,21 @@ namespace XzBotCs
                                         var searchResults = searchResponse.Items;
                                                                                 Console.WriteLine($"Search returned {searchResults.Count} results for '{query}'");
 
-                    var watermarkedFileIds = new Dictionary<string, string?>();
-                    if (_state.IsWatermarkEnabled)
-                    {
-                        var uploadTasks = searchResults
-                            .Where(item => !item.IsGif)
-                            .Select(async item => (item.Id, FileId: await GetOrUploadWatermarkedPhotoFileIdAsync(item, cancellationToken)))
-                            .ToArray();
-
-                        foreach (var upload in await Task.WhenAll(uploadTasks))
-                        {
-                            watermarkedFileIds[upload.Id] = upload.FileId;
-                        }
-                    }
+                    // При --random заранее оставляем только один элемент, чтобы не грузить ватермарку зря.
+                    var selectedItems = isRandom && searchResults.Count > 1
+                        ? new List<BingImageResult> { searchResults[Random.Shared.Next(searchResults.Count)] }
+                        : searchResults;
 
                     var results = new List<InlineQueryResult>();
-                    foreach (var item in searchResults)
+                    foreach (var item in selectedItems)
                     {
                         string finalUrl = item.Url;
                         string thumbnailUrl = string.IsNullOrEmpty(item.ThumbnailUrl) ? item.Url : item.ThumbnailUrl;
                         if (_state.IsWatermarkEnabled && !item.IsGif)
                         {
-                            watermarkedFileIds.TryGetValue(item.Id, out string? fileId);
+                            // Ленивая загрузка: ватермарка накладывается только на элементы,
+                            // реально попадающие в ответ (а не на все результаты поиска).
+                            string? fileId = await GetOrUploadWatermarkedPhotoFileIdAsync(item, cancellationToken);
                             if (!string.IsNullOrEmpty(fileId))
                             {
                                 results.Add(new InlineQueryResultCachedPhoto(item.Id, fileId)
@@ -922,11 +911,6 @@ namespace XzBotCs
                         }
                     }
 
-                    if (isRandom && results.Count > 1)
-                    {
-                        results = [results[Random.Shared.Next(results.Count)]];
-                    }
-
                     string nextOffset = searchResults.Count > 0 ? (offset + searchResults.Count).ToString() : "";
                     bool answered = await TryAnswerInlineQueryAsync(
                         botClient,
@@ -938,7 +922,6 @@ namespace XzBotCs
                         cancellationToken: cancellationToken);
 
                     _statsService.RecordRequest(inlineQuery.From.Id, inlineQuery.From.Username, query, answered && searchResults.Count > 0 && string.IsNullOrEmpty(searchResponse.ErrorType));
-                    _state.Save();
                 }
             }
             catch (Exception ex)
@@ -973,7 +956,7 @@ namespace XzBotCs
                             var available = string.Join(", ", _searchRegistry.All.Select(p => $"{p.Key} ({p.DisplayName})"));
                             await botClient.SendMessage(
                                 message.Chat.Id,
-                                $"🔎 *Провайдер поиска*\\nАктивный: `{Escape(_searchRegistry.ActiveKey)}`\\nДоступные: {Escape(available)}\\n\\nИспользование: `/provider bing` или `/provider ddg`",
+                                $"🔎 *Провайдер поиска*\\nАктивный: `{TelegramEscaper.EscapeMarkdownV2(_searchRegistry.ActiveKey)}`\\nДоступные: {TelegramEscaper.EscapeMarkdownV2(available)}\\n\\nИспользование: `/provider bing` или `/provider ddg`",
                                 parseMode: ParseMode.MarkdownV2,
                                 cancellationToken: ct);
                             return;
@@ -983,7 +966,7 @@ namespace XzBotCs
             {
                 await botClient.SendMessage(
                     message.Chat.Id,
-                    $"✅ Провайдер переключён на `{Escape(_searchRegistry.ActiveKey)}`",
+                    $"✅ Провайдер переключён на `{TelegramEscaper.EscapeMarkdownV2(_searchRegistry.ActiveKey)}`",
                     parseMode: ParseMode.MarkdownV2,
                     cancellationToken: ct);
             }
@@ -991,7 +974,7 @@ namespace XzBotCs
             {
                 await botClient.SendMessage(
                     message.Chat.Id,
-                    $"⚠️ Неизвестный провайдер: `{Escape(arg)}`",
+                    $"⚠️ Неизвестный провайдер: `{TelegramEscaper.EscapeMarkdownV2(arg)}`",
                     parseMode: ParseMode.MarkdownV2,
                     cancellationToken: ct);
             }
@@ -1024,7 +1007,7 @@ namespace XzBotCs
             foreach (var pick in shuffledItems)
             {
                 var markup = BuildSourceMarkup(pick);
-                var caption = $"🎲 *{Escape(topic)}*";
+                var caption = $"🎲 *{TelegramEscaper.EscapeMarkdownV2(topic)}*";
 
                 try
                 {

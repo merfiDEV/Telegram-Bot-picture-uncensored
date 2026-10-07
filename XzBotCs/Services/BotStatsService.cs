@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using SkiaSharp;
+using XzBotCs.Helpers;
 using XzBotCs.Models;
 using Telegram.Bot.Types.ReplyMarkups;
 
@@ -213,6 +214,17 @@ namespace XzBotCs.Services
             {
                 _state.ErrorCount++;
                 _state.ErrorDetails[errorType] = _state.ErrorDetails.TryGetValue(errorType, out int count) ? count + 1 : 1;
+
+                // Ограничиваем размер словаря: оставляем 50 самых частых типов ошибок.
+                if (_state.ErrorDetails.Count > 50)
+                {
+                    var top = _state.ErrorDetails
+                        .OrderByDescending(kv => kv.Value)
+                        .Take(50)
+                        .ToDictionary(kv => kv.Key, kv => kv.Value);
+                    _state.ErrorDetails.Clear();
+                    foreach (var kv in top) _state.ErrorDetails[kv.Key] = kv.Value;
+                }
             }
         }
 
@@ -220,9 +232,10 @@ namespace XzBotCs.Services
         {
             lock (_state.SyncRoot)
             {
+                var now = DateTime.Now;
                 _state.RecentRequests.Insert(0, new RequestRecord
                 {
-                    Time = DateTime.Now,
+                    Time = now,
                     UserId = userId,
                     Username = string.IsNullOrWhiteSpace(username) ? "Unknown" : username,
                     Query = query,
@@ -234,17 +247,7 @@ namespace XzBotCs.Services
                     _state.RecentRequests.RemoveRange(200, _state.RecentRequests.Count - 200);
                 }
 
-                UpdateStatsFromRecent();
-
-                if (_state.PopularQueries.Count > 50)
-                {
-                    var top = _state.PopularQueries
-                        .OrderByDescending(kv => kv.Value)
-                        .Take(50)
-                        .ToDictionary(kv => kv.Key, kv => kv.Value);
-                    _state.PopularQueries.Clear();
-                    foreach (var kv in top) _state.PopularQueries[kv.Key] = kv.Value;
-                }
+                UpdateStatsIncremental(now, query, success);
             }
 
             ScheduleSave();
@@ -287,17 +290,17 @@ namespace XzBotCs.Services
             foreach (var p in providerStatuses)
             {
                 string icon = p.Ok ? "✅" : "❌";
-                servicesLines.Append($"  {Escape(p.DisplayName)}: {icon} `{Escape(p.Status)}`\n");
+                servicesLines.Append($"  {TelegramEscaper.EscapeMarkdownV2(p.DisplayName)}: {icon} `{TelegramEscaper.EscapeMarkdownV2(p.Status)}`\n");
             }
 
             return "📊 *Статистика бота*\n\n" +
                    "⏱ *Аптайм*\n" +
-                   $"  `{Escape(uptimeStr)}` \\(с `{Escape(startedAt)}`\\)\n\n" +
+                   $"  `{TelegramEscaper.EscapeMarkdownV2(uptimeStr)}` \\(с `{TelegramEscaper.EscapeMarkdownV2(startedAt)}`\\)\n\n" +
                    "🌐 *Внешние сервисы*\n" +
                    servicesLines +
                    "\n📈 *Запросы*\n" +
                    $"  Всего: `{_state.UsageCount}`\n" +
-                   $"  Успешных: `{successCount}` \\({Escape(successRate.ToString())}%\\)\n" +
+                   $"  Успешных: `{successCount}` \\({TelegramEscaper.EscapeMarkdownV2(successRate.ToString())}%\\)\n" +
                    $"  Ошибок: `{_state.ErrorCount}`\n\n" +
                    "🔐 _admin only_";
         }
@@ -336,14 +339,14 @@ namespace XzBotCs.Services
                         }
 
                         lines.Add($"⏱ *Время ответа {providerName}*");
-                        lines.Add($"  среднее:  `{Escape(Math.Round(times.Average(), 1).ToString())} мс`");
-                        lines.Add($"  мин:      `{Escape(times.Min().ToString())} мс`");
-                        lines.Add($"  макс:     `{Escape(times.Max().ToString())} мс`");
+                        lines.Add($"  среднее:  `{TelegramEscaper.EscapeMarkdownV2(Math.Round(times.Average(), 1).ToString())} мс`");
+                        lines.Add($"  мин:      `{TelegramEscaper.EscapeMarkdownV2(times.Min().ToString())} мс`");
+                        lines.Add($"  макс:     `{TelegramEscaper.EscapeMarkdownV2(times.Max().ToString())} мс`");
                         lines.Add($"  замеров:  `{times.Count}`");
                         lines.Add("");
                     }
 
-                    lines.Add($"🔢 *Нагрузка:* `{Escape(requestsPerMinute.ToString())}` зап/мин");
+                    lines.Add($"🔢 *Нагрузка:* `{TelegramEscaper.EscapeMarkdownV2(requestsPerMinute.ToString())}` зап/мин");
                     lines.Add("");
 
                     if (_state.ErrorDetails.Count > 0)
@@ -351,7 +354,7 @@ namespace XzBotCs.Services
                         lines.Add("⚠️ *Ошибки по типам:*");
                         foreach (var item in _state.ErrorDetails.OrderByDescending(x => x.Value))
                         {
-                            lines.Add($"  `{Escape(item.Key)}` — `{item.Value}`");
+                            lines.Add($"  `{TelegramEscaper.EscapeMarkdownV2(item.Key)}` — `{item.Value}`");
                         }
                     }
                     else
@@ -396,7 +399,7 @@ namespace XzBotCs.Services
             lines.Add($"📊 *За сегодня:* `{todayTotal}` запросов ✅ `{todaySuccess}` ❌ `{todayErrors}`");
             if (topQueries.Count > 0)
             {
-                string topStr = string.Join(", ", topQueries.Select(x => $"\"{Escape(x.Query.Trim())}\" \\({x.Count}\\)"));
+                string topStr = string.Join(", ", topQueries.Select(x => $"\"{TelegramEscaper.EscapeMarkdownV2(x.Query.Trim())}\" \\({x.Count}\\)"));
                 lines.Add($"🔥 *Топ:* {topStr}");
             }
             lines.Add("");
@@ -436,7 +439,7 @@ namespace XzBotCs.Services
                 string time = request.Time.ToString("HH:mm:ss");
                 string status = request.Success ? "✅" : "❌";
                 string query = request.Query.Length > 25 ? request.Query.Substring(0, 25) + "..." : request.Query;
-                lines.Add($"`[{Escape(time)}]` {status} `@{Escape(request.Username)}` \\(`{request.UserId}`\\): _{Escape(query)}_");
+                lines.Add($"`[{TelegramEscaper.EscapeMarkdownV2(time)}]` {status} `@{TelegramEscaper.EscapeMarkdownV2(request.Username)}` \\(`{request.UserId}`\\): _{TelegramEscaper.EscapeMarkdownV2(query)}_");
             }
 
             return string.Join("\n", lines);
@@ -490,24 +493,43 @@ namespace XzBotCs.Services
             _state.Save();
         }
 
-        private void UpdateStatsFromRecent()
+        private DateTime _statsDay = DateTime.MinValue;
+
+        /// <summary>
+        /// Инкрементально обновляет дневную статистику и популярные запросы.
+        /// Полный пересчёт из RecentRequests выполняется только при смене дня.
+        /// </summary>
+        private void UpdateStatsIncremental(DateTime now, string query, bool success)
         {
-            var today = DateTime.Today;
-            var todayRequests = _state.RecentRequests.Where(r => r.Time.Date == today).ToList();
-            _state.TodayRequests = todayRequests.Count;
-            _state.TodaySuccess = todayRequests.Count(r => r.Success);
-            _state.TodayErrors = todayRequests.Count(r => !r.Success);
-
-            var allQueries = _state.RecentRequests
-                .GroupBy(r => r.Query)
-                .Select(g => new { Query = g.Key, Count = g.Count() })
-                .OrderByDescending(x => x.Count)
-                .Take(20);
-
-            _state.PopularQueries.Clear();
-            foreach (var item in allQueries)
+            if (_statsDay != now.Date)
             {
-                _state.PopularQueries[item.Query] = item.Count;
+                // Смена дня — считаем стартовые значения один раз.
+                _statsDay = now.Date;
+                var todayRequests = _state.RecentRequests.Where(r => r.Time.Date == now.Date).ToList();
+                _state.TodayRequests = todayRequests.Count;
+                _state.TodaySuccess = todayRequests.Count(r => r.Success);
+                _state.TodayErrors = todayRequests.Count(r => !r.Success);
+            }
+            else
+            {
+                _state.TodayRequests++;
+                if (success) _state.TodaySuccess++;
+                else _state.TodayErrors++;
+            }
+
+            if (!string.IsNullOrEmpty(query))
+            {
+                _state.PopularQueries[query] = _state.PopularQueries.TryGetValue(query, out int c) ? c + 1 : 1;
+
+                if (_state.PopularQueries.Count > 50)
+                {
+                    var top = _state.PopularQueries
+                        .OrderByDescending(kv => kv.Value)
+                        .Take(50)
+                        .ToDictionary(kv => kv.Key, kv => kv.Value);
+                    _state.PopularQueries.Clear();
+                    foreach (var kv in top) _state.PopularQueries[kv.Key] = kv.Value;
+                }
             }
         }
 
@@ -519,17 +541,6 @@ namespace XzBotCs.Services
             if (uptime.Minutes > 0) parts.Add($"{uptime.Minutes}м");
             parts.Add($"{uptime.Seconds}с");
             return string.Join(" ", parts);
-        }
-
-        private static string Escape(string text)
-        {
-            return text.Replace("\\", "\\\\")
-                .Replace("_", "\\_").Replace("*", "\\*").Replace("[", "\\[")
-                .Replace("]", "\\]").Replace("(", "\\(").Replace(")", "\\)")
-                .Replace("~", "\\~").Replace("`", "\\`").Replace(">", "\\>")
-                .Replace("#", "\\#").Replace("+", "\\+").Replace("-", "\\-")
-                .Replace("=", "\\=").Replace("|", "\\|").Replace("{", "\\{")
-                .Replace("}", "\\}").Replace(".", "\\.").Replace("!", "\\!");
         }
 
         private byte[] CreatePlaceholderImage(string text)
