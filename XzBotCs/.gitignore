@@ -1,0 +1,26 @@
+# Rust
+/target/
+
+# Бэкапы и временные файлы
+_cs_backup.zip
+*.zip
+*.tmp
+repl.ps1
+*.ps1
+
+# Данные бота (не коммитим — содержат ID пользователей и статистику)
+bot_state.json
+bot_state.json.*
+pref.json
+pref.json.*
+cookie/
+.claude/
+
+# Логи
+logs/
+*.log
+
+# .NET (на случай остатков)
+bin/
+obj/
+*.user
