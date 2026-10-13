@@ -28,7 +28,11 @@ env/
 *.log
 logs/
 
-# .NET
+# Rust
+target/
+**/target/
+
+# .NET (остатки)
 bin/
 obj/
 **/bin/
