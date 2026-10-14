@@ -1,4 +1,4 @@
-﻿use crate::helpers::telegram_ui_helper;
+use crate::helpers::telegram_ui_helper;
 use crate::models::bot_state::SharedState;
 use crate::services::bot_stats::BotStatsService;
 use crate::services::search_provider_registry::SearchProviderRegistry;
@@ -37,19 +37,32 @@ impl StatsMessageService {
     }
 
     pub async fn send_stats(&self, bot: &Bot, chat_id: ChatId) -> ResponseResult<()> {
+        let t0 = std::time::Instant::now();
         let provider_statuses = self.search_registry.check_all().await;
+        crate::log!("[stats] check_all: {:?}", t0.elapsed());
+
+        let t1 = std::time::Instant::now();
         let text = self.stats_service.build_stats_text(&provider_statuses);
         let markup = self.build_markup();
+        crate::log!("[stats] build_text+markup: {:?}", t1.elapsed());
 
+        let t2 = std::time::Instant::now();
         let chart_bytes = self.stats_service.generate_chart_image();
+        crate::log!(
+            "[stats] generate_chart: {:?} ({} bytes)",
+            t2.elapsed(),
+            chart_bytes.len()
+        );
         if !chart_bytes.is_empty() {
             let input = InputFile::memory(chart_bytes).file_name("stats.png");
+            let t3 = std::time::Instant::now();
             let r = bot
                 .send_photo(chat_id, input)
                 .caption(text.clone())
                 .parse_mode(ParseMode::MarkdownV2)
                 .reply_markup(markup.clone())
                 .await;
+            crate::log!("[stats] send_photo: {:?}", t3.elapsed());
             if let Err(e) = r {
                 crate::log!("send_stats photo failed: {}, retry as text", e);
                 let _ = bot

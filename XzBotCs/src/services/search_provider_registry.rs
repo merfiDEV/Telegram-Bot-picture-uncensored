@@ -145,17 +145,17 @@ impl SearchProviderRegistry {
         list
     }
 
-    /// Проверяет доступность всех провайдеров параллельно.
+    /// Проверяет доступность всех провайдеров ПАРАЛЛЕЛЬНО (как Task.WhenAll в C#).
     pub async fn check_all(&self) -> Vec<(String, String, bool, String)> {
-        let keys: Vec<String> = self.providers.keys().cloned().collect();
-        let mut futures = Vec::new();
-        for key in keys {
-            let provider = self.providers.get(&key).unwrap();
+        let futs = self.providers.iter().map(|(key, provider)| {
+            let key = key.clone();
             let display = provider.display_name().to_string();
-            let (ok, status) = provider.check().await;
-            futures.push((key, display, ok, status));
-        }
-        futures
+            async move {
+                let (ok, status) = provider.check().await;
+                (key, display, ok, status)
+            }
+        });
+        futures::future::join_all(futs).await
     }
 
     /// Ключ активного провайдера; при некорректном значении откатывается на Bing.

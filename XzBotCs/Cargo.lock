@@ -3104,6 +3104,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "futures",
  "md-5",
  "percent-encoding",
  "rand",
