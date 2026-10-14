@@ -1,0 +1,102 @@
+    /// /blacklist — управление чёрным списком (только админы).
+    ///   /blacklist              — показать список
+    ///   /blacklist add <слово>  — добавить
+    ///   /blacklist del <слово>  — удалить
+    async fn handle_blacklist(
+        &self,
+        bot: &Bot,
+        message: &Message,
+        message_text: &str,
+        from_id: Option<i64>,
+    ) -> ResponseResult<()> {
+        if !self.is_admin(from_id) {
+            bot.send_message(message.chat.id, "⛔ Нет доступа")
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            return Ok(());
+        }
+
+        let arg = self.strip_command_prefix(message_text, "/blacklist");
+        let mut parts = arg.splitn(2, ' ');
+        let action = parts.next().unwrap_or("").trim().to_lowercase();
+        let word = parts.next().unwrap_or("").trim().to_lowercase();
+
+        match action.as_str() {
+            "" => {
+                let words: Vec<String> = {
+                    let st = self.state.lock().unwrap();
+                    let mut v: Vec<String> = st.blacklist.iter().cloned().collect();
+                    v.sort();
+                    v
+                };
+                let body = if words.is_empty() {
+                    "_Список пуст_".to_string()
+                } else {
+                    words
+                        .iter()
+                        .map(|w| format!("• {}", escape_markdown_v2(w)))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                bot.send_message(
+                    message.chat.id,
+                    format!("🚫 *Чёрный список* \\({} слов\\)\n\n{}", words.len(), body),
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            }
+            "add" => {
+                if word.is_empty() {
+                    bot.send_message(message.chat.id, "Укажите слово: /blacklist add <слово>")
+                        .await?;
+                    return Ok(());
+                }
+                let added = {
+                    let mut st = self.state.lock().unwrap();
+                    let added = st.blacklist.insert(word.clone());
+                    st.save();
+                    added
+                };
+                bot.send_message(
+                    message.chat.id,
+                    if added {
+                        format!("✅ Добавлено в чёрный список: {}", word)
+                    } else {
+                        format!("ℹ️ Уже в списке: {}", word)
+                    },
+                )
+                .await?;
+            }
+            "del" => {
+                if word.is_empty() {
+                    bot.send_message(message.chat.id, "Укажите слово: /blacklist del <слово>")
+                        .await?;
+                    return Ok(());
+                }
+                let removed = {
+                    let mut st = self.state.lock().unwrap();
+                    let removed = st.blacklist.remove(&word);
+                    st.save();
+                    removed
+                };
+                bot.send_message(
+                    message.chat.id,
+                    if removed {
+                        format!("🗑 Удалено из чёрного списка: {}", word)
+                    } else {
+                        format!("ℹ️ Нет в списке: {}", word)
+                    },
+                )
+                .await?;
+            }
+            _ => {
+                bot.send_message(
+                    message.chat.id,
+                    "Использование: /blacklist  |  /blacklist add <слово>  |  /blacklist del <слово>",
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+

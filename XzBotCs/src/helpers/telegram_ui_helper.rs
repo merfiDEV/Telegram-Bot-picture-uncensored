@@ -32,6 +32,33 @@ pub fn build_stats_markup(
     ])
 }
 
+/// Разметка под фото в чате: доминирующий ряд 👍/👎 + «Перейти на сайт» внизу.
+/// Тег (обычно поисковый запрос) кодируется в callback для сбора оценок.
+pub fn photo_markup_with_rating(
+    item: &BingImageResult,
+    tag: &str,
+    up: i32,
+    down: i32,
+) -> InlineKeyboardMarkup {
+    let (btn_text, btn_url) = source_button(item);
+    // Тег может содержать произвольные символы — base64url без паддинга, чтобы уложиться в лимит callback (64 байта).
+    use base64::Engine;
+    let tag_enc = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag.as_bytes());
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback(format!("👍 {}", up), format!("rate:up:{}", tag_enc)),
+            InlineKeyboardButton::callback(
+                format!("👎 {}", down),
+                format!("rate:down:{}", tag_enc),
+            ),
+        ],
+        vec![InlineKeyboardButton::url(
+            btn_text,
+            btn_url.parse().unwrap(),
+        )],
+    ])
+}
+
 pub fn source_button(item: &BingImageResult) -> (String, String) {
     let has_http = item.source_url.to_lowercase().starts_with("http");
     let url = if has_http {

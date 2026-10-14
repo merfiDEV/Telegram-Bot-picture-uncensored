@@ -1,4 +1,4 @@
-use crate::helpers::telegram_ui_helper;
+﻿use crate::helpers::telegram_ui_helper;
 use crate::models::bot_state::SharedState;
 use crate::services::bot_stats::BotStatsService;
 use crate::services::search_provider_registry::SearchProviderRegistry;
@@ -43,6 +43,13 @@ impl CallbackQueryHandler {
 
     pub async fn handle(&self, bot: &Bot, q: CallbackQuery) -> ResponseResult<()> {
         let from_id = q.from.id.0 as i64;
+
+        // Ratings are available to ALL users (not only admins) — handle before the permission check.
+        let data0 = q.data.clone().unwrap_or_default();
+        if let Some(rest) = data0.strip_prefix("rate:") {
+            return self.handle_rating(bot, q, rest).await;
+        }
+
         if self.admin_ids.is_empty() || !self.admin_ids.contains(&from_id) {
             let _ = bot
                 .answer_callback_query(q.id.clone())
@@ -201,6 +208,115 @@ impl CallbackQueryHandler {
                 .await;
         }
 
+        Ok(())
+    }
+
+    /// Обработка голоса за тег: rest = "up:<tagEnc>" или "down:<tagEnc>".
+    async fn handle_rating(&self, bot: &Bot, q: CallbackQuery, rest: &str) -> ResponseResult<()> {
+        let (dir, tag_enc) = match rest.split_once(':') {
+            Some((d, t)) => (d, t),
+            None => return Ok(()),
+        };
+        use base64::Engine;
+        let tag = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(tag_enc) {
+            Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
+            Err(_) => return Ok(()),
+        };
+        if tag.is_empty() {
+            return Ok(());
+        }
+
+        let user_id = q.from.id.0 as i64;
+        let want: i8 = if dir == "up" { 1 } else { -1 };
+
+        // Один пользователь = один голос на тег: повторное нажатие снимает голос,
+        // нажатие противоположного — меняет знак.
+        let (up_count, down_count, action) = {
+            let mut st = self.state.lock().unwrap();
+            let cur = st
+                .user_votes
+                .get(&tag)
+                .and_then(|m| m.get(&user_id))
+                .copied()
+                .unwrap_or(0);
+            let new = if cur == want { 0 } else { want };
+
+            let entry = st.user_votes.entry(tag.clone()).or_default();
+            if new == 0 {
+                entry.remove(&user_id);
+            } else {
+                entry.insert(user_id, new);
+            }
+
+            let (mut u, mut d) = (0i32, 0i32);
+            if let Some(votes) = st.user_votes.get(&tag) {
+                for v in votes.values() {
+                    if *v > 0 {
+                        u += 1;
+                    } else if *v < 0 {
+                        d += 1;
+                    }
+                }
+            }
+            let rating = st.tag_ratings.entry(tag.clone()).or_default();
+            rating.up = u;
+            rating.down = d;
+            st.save();
+            let action = if new == 0 {
+                "off"
+            } else if new > 0 {
+                "up"
+            } else {
+                "down"
+            };
+            (u, d, action)
+        };
+        crate::log!(
+            "RATING {} tag='{}' user={} (up={} down={})",
+            action,
+            tag,
+            user_id,
+            up_count,
+            down_count
+        );
+
+        let _ = bot
+            .answer_callback_query(q.id.clone())
+            .text(if action == "off" {
+                "Голос снят"
+            } else if action == "up" {
+                "Спасибо! 👍"
+            } else {
+                "Спасибо! 👎"
+            })
+            .await;
+
+        // Обновляем счётчики на кнопках, сохраняя остальные ряды (напр. «Перейти на сайт»).
+        if let Some(msg) = q.regular_message() {
+            use base64::Engine;
+            let tag_enc = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag.as_bytes());
+            let mut rows: Vec<Vec<teloxide::types::InlineKeyboardButton>> = Vec::new();
+            rows.push(vec![
+                teloxide::types::InlineKeyboardButton::callback(
+                    format!("👍 {}", up_count),
+                    format!("rate:up:{}", tag_enc),
+                ),
+                teloxide::types::InlineKeyboardButton::callback(
+                    format!("👎 {}", down_count),
+                    format!("rate:down:{}", tag_enc),
+                ),
+            ]);
+            if let Some(existing) = msg.reply_markup() {
+                for row in existing.inline_keyboard.iter().skip(1) {
+                    rows.push(row.clone());
+                }
+            }
+            let markup = teloxide::types::InlineKeyboardMarkup::new(rows);
+            let _ = bot
+                .edit_message_reply_markup(msg.chat.id, msg.id)
+                .reply_markup(markup)
+                .await;
+        }
         Ok(())
     }
 

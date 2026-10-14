@@ -1,4 +1,4 @@
-use crate::app_config::DEVELOPER_PROFILE_URL;
+﻿use crate::app_config::DEVELOPER_PROFILE_URL;
 use crate::commands::broadcast::BroadcastService;
 use crate::helpers::telegram_escaper::escape_markdown_v2;
 use crate::helpers::user_input_helper::extract_user_id;
@@ -150,6 +150,11 @@ impl MessageCommandHandler {
             self.handle_random(bot, &message, message_text).await?;
         } else if message_text.starts_with("/upt") {
             self.handle_upt(bot, &message, message_text, from_id)
+                .await?;
+        } else if message_text.starts_with("/tags") {
+            self.handle_tags(bot, &message, from_id).await?;
+        } else if message_text.starts_with("/blacklist") {
+            self.handle_blacklist(bot, &message, message_text, from_id)
                 .await?;
         } else {
             return Ok(false);
@@ -712,6 +717,176 @@ ID: `{}`
         self.broadcast_service
             .send_broadcast(bot, message.chat.id, &announcement)
             .await?;
+        Ok(())
+    }
+
+    /// /tags — топ тегов по рейтингу (👍 − 👎), только для админов.
+    async fn handle_blacklist(
+        &self,
+        bot: &Bot,
+        message: &Message,
+        message_text: &str,
+        from_id: Option<i64>,
+    ) -> ResponseResult<()> {
+        if !self.is_admin(from_id) {
+            bot.send_message(message.chat.id, "⛔ Нет доступа")
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            return Ok(());
+        }
+
+        let arg = self.strip_command_prefix(message_text, "/blacklist");
+        let mut parts = arg.splitn(2, ' ');
+        let action = parts.next().unwrap_or("").trim().to_lowercase();
+        let word = parts.next().unwrap_or("").trim().to_lowercase();
+
+        match action.as_str() {
+            "" => {
+                let words: Vec<String> = {
+                    let st = self.state.lock().unwrap();
+                    let mut v: Vec<String> = st.blacklist.iter().cloned().collect();
+                    v.sort();
+                    v
+                };
+                let body = if words.is_empty() {
+                    "_Список пуст_".to_string()
+                } else {
+                    words
+                        .iter()
+                        .map(|w| format!("• {}", escape_markdown_v2(w)))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
+                bot.send_message(
+                    message.chat.id,
+                    format!("🚫 *Чёрный список* \\({} слов\\)
+
+{}", words.len(), body),
+                )
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            }
+            "add" => {
+                if word.is_empty() {
+                    bot.send_message(message.chat.id, "Укажите слово: /blacklist add <слово>")
+                        .await?;
+                    return Ok(());
+                }
+                let added = {
+                    let mut st = self.state.lock().unwrap();
+                    let added = st.blacklist.insert(word.clone());
+                    st.save();
+                    added
+                };
+                bot.send_message(
+                    message.chat.id,
+                    if added {
+                        format!("✅ Добавлено в чёрный список: {}", word)
+                    } else {
+                        format!("ℹ️ Уже в списке: {}", word)
+                    },
+                )
+                .await?;
+            }
+            "del" => {
+                if word.is_empty() {
+                    bot.send_message(message.chat.id, "Укажите слово: /blacklist del <слово>")
+                        .await?;
+                    return Ok(());
+                }
+                let removed = {
+                    let mut st = self.state.lock().unwrap();
+                    let removed = st.blacklist.remove(&word);
+                    st.save();
+                    removed
+                };
+                bot.send_message(
+                    message.chat.id,
+                    if removed {
+                        format!("🗑 Удалено из чёрного списка: {}", word)
+                    } else {
+                        format!("ℹ️ Нет в списке: {}", word)
+                    },
+                )
+                .await?;
+            }
+            _ => {
+                bot.send_message(
+                    message.chat.id,
+                    "Использование: /blacklist  |  /blacklist add <слово>  |  /blacklist del <слово>",
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_tags(
+        &self,
+        bot: &Bot,
+        message: &Message,
+        from_id: Option<i64>,
+    ) -> ResponseResult<()> {
+        if !self.is_admin(from_id) {
+            bot.send_message(message.chat.id, "⛔ Нет доступа")
+                .parse_mode(ParseMode::MarkdownV2)
+                .await?;
+            return Ok(());
+        }
+
+        let mut tags: Vec<(String, i32, i32)> = {
+            let st = self.state.lock().unwrap();
+            st.tag_ratings
+                .iter()
+                .map(|(k, v)| (k.clone(), v.up, v.down))
+                .collect()
+        };
+
+        if tags.is_empty() {
+            bot.send_message(message.chat.id, "Пока нет оценок тегов.")
+                .await?;
+            return Ok(());
+        }
+
+        // Сортировка по рейтингу (up - down), затем по кол-ву голосов.
+        tags.sort_by(|a, b| {
+            let ra = a.1 - a.2;
+            let rb = b.1 - b.2;
+            rb.cmp(&ra).then_with(|| (b.1 + b.2).cmp(&(a.1 + a.2)))
+        });
+
+        let mut lines = vec!["🏷 *Топ тегов по оценкам*".to_string(), String::new()];
+        for (i, (tag, up, down)) in tags.iter().take(20).enumerate() {
+            let score = up - down;
+            let score_str = if score >= 0 {
+                format!("+{}", score)
+            } else {
+                score.to_string()
+            };
+            // Каждую строку строим из уже экранированных кусков (MarkdownV2).
+            let row = format!(
+                "{}{} {} — 👍{} 👎{} {}{}{}",
+                i + 1,
+                escape_markdown_v2("."),
+                escape_markdown_v2(tag),
+                up,
+                down,
+                escape_markdown_v2("("),
+                escape_markdown_v2(&score_str),
+                escape_markdown_v2(")")
+            );
+            lines.push(row);
+        }
+
+        bot.send_message(
+            message.chat.id,
+            lines.join(
+                "
+",
+            ),
+        )
+        .parse_mode(ParseMode::MarkdownV2)
+        .await?;
         Ok(())
     }
 }

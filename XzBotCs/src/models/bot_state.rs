@@ -50,6 +50,18 @@ pub struct BotState {
     pub today_errors: i32,
     #[serde(rename = "DashboardStates")]
     pub dashboard_states: HashMap<i64, DashboardState>,
+    /// Рейтинги тегов: ключ — тег (поисковый запрос), значение — голоса 👍/👎.
+    #[serde(rename = "TagRatings")]
+    pub tag_ratings: HashMap<String, TagRating>,
+    /// Кэш превью: ключ — id картинки, значение — file_id в Telegram.
+    #[serde(rename = "PreviewCache")]
+    pub preview_cache: HashMap<String, String>,
+    /// Голоса пользователей: тег → (user_id → голос: +1 за / -1 против).
+    #[serde(rename = "UserVotes")]
+    pub user_votes: HashMap<String, HashMap<i64, i8>>,
+    /// Чёрный список запрещённых слов (в нижнем регистре). Запрос с таким словом отклоняется.
+    #[serde(rename = "Blacklist")]
+    pub blacklist: HashSet<String>,
 }
 
 impl Default for BotState {
@@ -76,17 +88,91 @@ impl Default for BotState {
             today_success: 0,
             today_errors: 0,
             dashboard_states: HashMap::new(),
+            tag_ratings: HashMap::new(),
+            preview_cache: HashMap::new(),
+            user_votes: HashMap::new(),
+            blacklist: default_blacklist(),
         }
     }
 }
 
 pub const BOT_STATE_FILE: &str = "bot_state.json";
 
+/// Базовый чёрный список (CSAM-связанные термины, рус/англ).
+/// Дополняется админом через /blacklist. При загрузке старого состояния список
+/// тоже наполняется, если пуст.
+pub fn default_blacklist() -> HashSet<String> {
+    [
+        // --- явные CSAM-термины ---
+        "cp",
+        "c.p.",
+        "childporn",
+        "child porn",
+        "childporno",
+        "child porno",
+        "childsex",
+        "child sex",
+        "child nude",
+        "childnude",
+        "child naked",
+        "underage",
+        "underage nude",
+        "underage sex",
+        "loli nude",
+        "lolicon nude",
+        "pedo",
+        "pedophile",
+        "pedophilia",
+        "preteen nude",
+        "preteen sex",
+        "minor nude",
+        "minor sex",
+        "jailbait nude",
+        // --- русские ---
+        "цп",
+        "детское порно",
+        "детская порнография",
+        "порно дети",
+        "дети порно",
+        "малолетки",
+        "малолетка",
+        "малолетнее",
+        "несовершеннолетние порно",
+        "школьница порно",
+        "школьницы порно",
+        "лоли порно",
+        "педо",
+        "педофил",
+        "подростки порно",
+        "подросток порно",
+        "малолетнее порно",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// Проверяет, содержит ли запрос запрещённое слово из списка.
+/// Возвращает само совпавшее слово (для лога), если найдено.
+pub fn find_blacklisted(query: &str, blacklist: &HashSet<String>) -> Option<String> {
+    let q = query.to_lowercase();
+    for word in blacklist {
+        if !word.is_empty() && q.contains(word.as_str()) {
+            return Some(word.clone());
+        }
+    }
+    None
+}
+
 impl BotState {
     pub fn load() -> Self {
         if let Ok(json) = fs::read_to_string(BOT_STATE_FILE) {
             if let Ok(mut state) = serde_json::from_str::<BotState>(&json) {
                 state.started_at = Local::now();
+                // Дополняем чёрный список базовыми терминами, если его ещё нет/пуст.
+                if state.blacklist.is_empty() {
+                    state.blacklist = default_blacklist();
+                }
                 return state;
             }
         }
@@ -129,6 +215,16 @@ impl Default for RequestRecord {
             success: false,
         }
     }
+}
+
+/// Рейтинг тега: голоса за (👍) и против (👎).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TagRating {
+    #[serde(rename = "Up")]
+    pub up: i32,
+    #[serde(rename = "Down")]
+    pub down: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

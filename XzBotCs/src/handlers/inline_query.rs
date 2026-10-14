@@ -119,6 +119,38 @@ impl InlineQueryService {
             return self.handle_logs(bot, inline_query).await;
         }
 
+        // Чёрный список: отклоняем запрещённые запросы.
+        {
+            let bl = {
+                let st = self.state.lock().unwrap();
+                st.blacklist.clone()
+            };
+            if let Some(word) = crate::models::bot_state::find_blacklisted(&query, &bl) {
+                crate::log!(
+                    "BLOCKED inline query from {}: '{}' (matched '{}')",
+                    from_id,
+                    query,
+                    word
+                );
+                self.stats_service.record_error("blacklisted");
+                let result = teloxide::types::InlineQueryResultArticle::new(
+                    "blocked",
+                    "🚫 Запрос отклонён",
+                    teloxide::types::InputMessageContent::Text(
+                        teloxide::types::InputMessageContentText::new(
+                            "Такой запрос запрещён и не будет обработан.",
+                        ),
+                    ),
+                );
+                let _ = bot
+                    .answer_inline_query(inline_query.id.clone(), vec![result.into()])
+                    .cache_time(0)
+                    .is_personal(true)
+                    .await;
+                return Ok(());
+            }
+        }
+
         let mut query_mut = query.clone();
         let is_random = try_parse_flag(&mut query_mut, "--random");
         let offset: i32 = inline_query.offset.parse().unwrap_or(0);
@@ -189,6 +221,20 @@ impl InlineQueryService {
                     continue;
                 }
                 final_url = self.build_proxy_image_url(&item.url);
+            } else if !item.is_gif {
+                // Кэш превью: если картинка уже отправлялась в чат — отдаём по file_id (мгновенно).
+                let cached = {
+                    let st = self.state.lock().unwrap();
+                    st.preview_cache.get(&item.id).cloned()
+                };
+                if let Some(file_id) = cached {
+                    if !file_id.is_empty() {
+                        let mut r = InlineQueryResultCachedPhoto::new(item.id.clone(), file_id);
+                        r = r.reply_markup(source_markup(item));
+                        results.push(r.into());
+                        continue;
+                    }
+                }
             }
 
             let markup = source_markup(item);
