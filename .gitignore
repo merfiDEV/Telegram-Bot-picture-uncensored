@@ -55,6 +55,8 @@ Thumbs.db
 Desktop.ini
 
 # Tooling
+_m.txt
+*.tmp
 .qwen/
 .playwright-mcp/
 .gemini/
