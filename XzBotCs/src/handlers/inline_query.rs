@@ -1,4 +1,4 @@
-﻿use crate::helpers::telegram_escaper::escape_markdown_v2;
+use crate::helpers::telegram_escaper::escape_markdown_v2;
 use crate::helpers::user_input_helper::try_parse_flag;
 use crate::models::bot_state::SharedState;
 use crate::search_types::BingImageResult;
@@ -124,7 +124,10 @@ impl InlineQueryService {
         let offset: i32 = inline_query.offset.parse().unwrap_or(0);
         crate::log!(
             "Inline query from {}: '{}', offset={}, random={}",
-            from_id, query_mut, offset, is_random
+            from_id,
+            query_mut,
+            offset,
+            is_random
         );
 
         self.stats_service.increment_usage();
@@ -347,7 +350,8 @@ impl InlineQueryService {
         if !content_type.to_lowercase().starts_with("image/") {
             crate::log!(
                 "Watermark cache skipped non-image content-type '{}': {}",
-                content_type, item.url
+                content_type,
+                item.url
             );
             return None;
         }

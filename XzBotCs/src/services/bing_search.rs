@@ -171,7 +171,8 @@ impl BingSearchService {
             let block = &cap[1];
 
             let murl_re = Regex::new(r#"murl&quot;:&quot;(.*?)&quot;"#).unwrap();
-            let turl_re = Regex::new(r#"turl&quot;:&quot;(.*?)&quot;"#).unwrap();
+            // [^a-zA-Z] перед turl — чтобы не матчить "cturl&quot;:&quot;" (пустое значение).
+            let turl_re = Regex::new(r#"[^a-zA-Z]turl&quot;:&quot;(.*?)&quot;"#).unwrap();
             let purl_re = Regex::new(r#"purl&quot;:&quot;(.*?)&quot;"#).unwrap();
 
             let murl_match = match murl_re.captures(block) {
