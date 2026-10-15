@@ -59,6 +59,9 @@ pub struct BotState {
     /// Голоса пользователей: тег → (user_id → голос: +1 за / -1 против).
     #[serde(rename = "UserVotes")]
     pub user_votes: HashMap<String, HashMap<i64, i8>>,
+    /// Данные инлайн-картинок для восстановления кнопок рейтинга: id → (тег, текст и url кнопки сайта).
+    #[serde(rename = "InlineItemCache")]
+    pub inline_item_cache: HashMap<String, InlineItemInfo>,
     /// Чёрный список запрещённых слов (в нижнем регистре). Запрос с таким словом отклоняется.
     #[serde(rename = "Blacklist")]
     pub blacklist: HashSet<String>,
@@ -91,6 +94,7 @@ impl Default for BotState {
             tag_ratings: HashMap::new(),
             preview_cache: HashMap::new(),
             user_votes: HashMap::new(),
+            inline_item_cache: HashMap::new(),
             blacklist: default_blacklist(),
         }
     }
@@ -215,6 +219,18 @@ impl Default for RequestRecord {
             success: false,
         }
     }
+}
+
+/// Данные инлайн-картинки: нужны, чтобы восстановить ряд «Перейти на сайт» при обновлении рейтинга.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InlineItemInfo {
+    #[serde(rename = "Tag")]
+    pub tag: String,
+    #[serde(rename = "BtnText")]
+    pub btn_text: String,
+    #[serde(rename = "BtnUrl")]
+    pub btn_url: String,
 }
 
 /// Рейтинг тега: голоса за (👍) и против (👎).

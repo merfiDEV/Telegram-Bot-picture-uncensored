@@ -211,16 +211,33 @@ impl CallbackQueryHandler {
         Ok(())
     }
 
-    /// Обработка голоса за тег: rest = "up:<tagEnc>" или "down:<tagEnc>".
+    /// Обработка голоса: rest = "up:<enc>" или "down:<enc>".
+    /// Для инлайн-сообщений <enc> — id картинки (тег и кнопка сайта берутся из inline_item_cache),
+    /// для обычных сообщений <enc> — сам тег.
     async fn handle_rating(&self, bot: &Bot, q: CallbackQuery, rest: &str) -> ResponseResult<()> {
-        let (dir, tag_enc) = match rest.split_once(':') {
+        let (dir, enc) = match rest.split_once(':') {
             Some((d, t)) => (d, t),
             None => return Ok(()),
         };
         use base64::Engine;
-        let tag = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(tag_enc) {
+        let decoded = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(enc) {
             Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
             Err(_) => return Ok(()),
+        };
+        if decoded.is_empty() {
+            return Ok(());
+        }
+
+        // Для инлайна enc — id картинки; достаём тег и кнопку сайта из кэша.
+        let inline_info = if q.inline_message_id.is_some() {
+            let st = self.state.lock().unwrap();
+            st.inline_item_cache.get(&decoded).cloned()
+        } else {
+            None
+        };
+        let (tag, inline_button) = match inline_info {
+            Some(info) => (info.tag, Some((info.btn_text, info.btn_url))),
+            None => (decoded.clone(), None),
         };
         if tag.is_empty() {
             return Ok(());
@@ -291,21 +308,46 @@ impl CallbackQueryHandler {
             })
             .await;
 
-        // Обновляем счётчики на кнопках, сохраняя остальные ряды (напр. «Перейти на сайт»).
-        if let Some(msg) = q.regular_message() {
-            use base64::Engine;
-            let tag_enc = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag.as_bytes());
+        // callback рейтинга должен нести тот же enc, что пришёл: для инлайна — id картинки, иначе — тег.
+        let cb_enc = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            inline_button
+                .as_ref()
+                .map(|_| decoded.as_str())
+                .unwrap_or(tag.as_str())
+                .as_bytes(),
+        );
+        let rating_row = vec![
+            teloxide::types::InlineKeyboardButton::callback(
+                format!("👍 {}", up_count),
+                format!("rate:up:{}", cb_enc),
+            ),
+            teloxide::types::InlineKeyboardButton::callback(
+                format!("👎 {}", down_count),
+                format!("rate:down:{}", cb_enc),
+            ),
+        ];
+
+        if let Some(inline_message_id) = q.inline_message_id.clone() {
+            // Инлайн-сообщение: восстанавливаем ряд рейтинга + кнопку «Перейти на сайт» из кэша.
             let mut rows: Vec<Vec<teloxide::types::InlineKeyboardButton>> = Vec::new();
-            rows.push(vec![
-                teloxide::types::InlineKeyboardButton::callback(
-                    format!("👍 {}", up_count),
-                    format!("rate:up:{}", tag_enc),
-                ),
-                teloxide::types::InlineKeyboardButton::callback(
-                    format!("👎 {}", down_count),
-                    format!("rate:down:{}", tag_enc),
-                ),
-            ]);
+            rows.push(rating_row);
+            if let Some((btn_text, btn_url)) = &inline_button {
+                if let Ok(u) = btn_url.parse() {
+                    rows.push(vec![teloxide::types::InlineKeyboardButton::url(
+                        btn_text.clone(),
+                        u,
+                    )]);
+                }
+            }
+            let markup = teloxide::types::InlineKeyboardMarkup::new(rows);
+            let _ = bot
+                .edit_message_reply_markup_inline(inline_message_id)
+                .reply_markup(markup)
+                .await;
+        } else if let Some(msg) = q.regular_message() {
+            // Обычное сообщение: сохраняем остальные ряды (напр. «Перейти на сайт»).
+            let mut rows: Vec<Vec<teloxide::types::InlineKeyboardButton>> = Vec::new();
+            rows.push(rating_row);
             if let Some(existing) = msg.reply_markup() {
                 for row in existing.inline_keyboard.iter().skip(1) {
                     rows.push(row.clone());

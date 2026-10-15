@@ -201,6 +201,32 @@ impl InlineQueryService {
             search_results.clone()
         };
 
+        // Тег для рейтинга — сам поисковый запрос; счётчики берём из состояния.
+        let (tag_up, tag_down) = {
+            let st = self.state.lock().unwrap();
+            st.tag_ratings
+                .get(&query_mut)
+                .map(|r| (r.up, r.down))
+                .unwrap_or((0, 0))
+        };
+
+        // Сохраняем данные картинок, чтобы в callback рейтинга восстановить тег и кнопку «Перейти на сайт».
+        {
+            let mut st = self.state.lock().unwrap();
+            for item in &selected_items {
+                let (btn_text, btn_url) = crate::helpers::telegram_ui_helper::source_button(item);
+                st.inline_item_cache.insert(
+                    item.id.clone(),
+                    crate::models::bot_state::InlineItemInfo {
+                        tag: query_mut.clone(),
+                        btn_text,
+                        btn_url,
+                    },
+                );
+            }
+            st.save();
+        }
+
         let mut results: Vec<InlineQueryResult> = Vec::new();
         for item in &selected_items {
             let mut final_url = item.url.clone();
@@ -216,7 +242,7 @@ impl InlineQueryService {
                     .await
                 {
                     let mut r = InlineQueryResultCachedPhoto::new(item.id.clone(), file_id);
-                    r = r.reply_markup(source_markup(item));
+                    r = r.reply_markup(source_markup(item, tag_up, tag_down));
                     results.push(r.into());
                     continue;
                 }
@@ -230,14 +256,14 @@ impl InlineQueryService {
                 if let Some(file_id) = cached {
                     if !file_id.is_empty() {
                         let mut r = InlineQueryResultCachedPhoto::new(item.id.clone(), file_id);
-                        r = r.reply_markup(source_markup(item));
+                        r = r.reply_markup(source_markup(item, tag_up, tag_down));
                         results.push(r.into());
                         continue;
                     }
                 }
             }
 
-            let markup = source_markup(item);
+            let markup = source_markup(item, tag_up, tag_down);
             let final_url_parsed = final_url.parse().unwrap();
             let thumb_parsed = thumbnail_url.parse().unwrap();
             if item.is_gif {
@@ -453,11 +479,12 @@ impl InlineQueryService {
     }
 }
 
-fn source_markup(item: &BingImageResult) -> teloxide::types::InlineKeyboardMarkup {
-    let (text, url) = crate::helpers::telegram_ui_helper::source_button(item);
-    teloxide::types::InlineKeyboardMarkup::new(vec![vec![
-        teloxide::types::InlineKeyboardButton::url(text, url.parse().unwrap()),
-    ]])
+fn source_markup(
+    item: &BingImageResult,
+    up: i32,
+    down: i32,
+) -> teloxide::types::InlineKeyboardMarkup {
+    crate::helpers::telegram_ui_helper::inline_markup_with_rating(item, &item.id, up, down)
 }
 
 #[allow(unused_imports)]

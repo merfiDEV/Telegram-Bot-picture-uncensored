@@ -59,6 +59,29 @@ pub fn photo_markup_with_rating(
     ])
 }
 
+/// Инлайн-разметка: ряд 👍/👎 (callback несёт id картинки) + «Перейти на сайт».
+/// item_id используется и как ключ в inline_item_cache, и внутри callback_data.
+pub fn inline_markup_with_rating(
+    item: &BingImageResult,
+    item_id: &str,
+    up: i32,
+    down: i32,
+) -> InlineKeyboardMarkup {
+    let (btn_text, btn_url) = source_button(item);
+    use base64::Engine;
+    let id_enc = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(item_id.as_bytes());
+    InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback(format!("👍 {}", up), format!("rate:up:{}", id_enc)),
+            InlineKeyboardButton::callback(format!("👎 {}", down), format!("rate:down:{}", id_enc)),
+        ],
+        vec![InlineKeyboardButton::url(
+            btn_text,
+            btn_url.parse().unwrap(),
+        )],
+    ])
+}
+
 pub fn source_button(item: &BingImageResult) -> (String, String) {
     let has_http = item.source_url.to_lowercase().starts_with("http");
     let url = if has_http {
